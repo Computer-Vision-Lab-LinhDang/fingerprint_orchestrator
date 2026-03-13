@@ -67,13 +67,13 @@ def clear_screen():
     os.system("clear" if os.name != "nt" else "cls")
 
 
-def fmt_time(ts: float | None) -> str:
+def fmt_time(ts):
     if ts is None:
         return "—"
     return datetime.fromtimestamp(ts).strftime("%H:%M:%S")
 
 
-def fmt_ago(ts: float | None) -> str:
+def fmt_ago(ts):
     if ts is None:
         return "—"
     diff = int(time.time() - ts)
@@ -85,9 +85,11 @@ def fmt_ago(ts: float | None) -> str:
 
 
 # ── MQTT Callbacks ───────────────────────────────────────────
-def _on_connect(client, userdata, flags, reason_code, properties):
+def _on_connect(client, userdata, flags, *args):
+    # Compatible with both paho v1 (rc,) and v2 (reason_code, properties)
     global _connected
-    if reason_code == 0:
+    rc = args[0]
+    if rc == 0:
         _connected = True
         client.subscribe("worker/+/heartbeat", qos=1)
         client.subscribe("worker/+/status", qos=1)
@@ -97,7 +99,7 @@ def _on_connect(client, userdata, flags, reason_code, properties):
         _connected = False
 
 
-def _on_disconnect(client, userdata, flags, reason_code, properties):
+def _on_disconnect(client, userdata, *args):
     global _connected
     _connected = False
 
@@ -127,6 +129,7 @@ def _on_message(client, userdata, message: mqtt.MQTTMessage):
                 "gpu_used": data.get("gpu_memory_used_mb"),
                 "gpu_total": data.get("gpu_memory_total_mb"),
             }
+        _add_log("heartbeat", worker_id, {"status": data.get("status")})
         _write_log("heartbeat", worker_id, {"status": data.get("status")})
 
     # worker/+/status (LWT)
@@ -161,15 +164,22 @@ def _on_message(client, userdata, message: mqtt.MQTTMessage):
 _mqtt_client: Optional[mqtt.Client] = None
 
 
-def _get_client() -> mqtt.Client:
+def _get_client():
     global _mqtt_client
     if _mqtt_client is None:
         settings = get_settings()
-        _mqtt_client = mqtt.Client(
-            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-            client_id=f"orchestrator-cli-{os.getpid()}",
-            protocol=mqtt.MQTTv311,
-        )
+        # Support both paho-mqtt v1.x and v2.x
+        try:
+            _mqtt_client = mqtt.Client(
+                callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+                client_id="orchestrator-cli-{}".format(os.getpid()),
+                protocol=mqtt.MQTTv311,
+            )
+        except (AttributeError, TypeError):
+            _mqtt_client = mqtt.Client(
+                client_id="orchestrator-cli-{}".format(os.getpid()),
+                protocol=mqtt.MQTTv311,
+            )
         if settings.MQTT_USERNAME:
             _mqtt_client.username_pw_set(settings.MQTT_USERNAME, settings.MQTT_PASSWORD)
         _mqtt_client.on_connect = _on_connect
