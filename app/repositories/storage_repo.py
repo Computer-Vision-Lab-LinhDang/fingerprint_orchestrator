@@ -1,4 +1,4 @@
-# TODO: MinIO client — enable when MinIO storage is ready
+# TODO: Storage repository — enable when MinIO is ready
 
 from __future__ import annotations
 
@@ -17,7 +17,9 @@ from app.core.exceptions import StorageError
 logger = logging.getLogger(__name__)
 
 
-class MinIOClient:
+class StorageRepository:
+    """Data access layer for MinIO object storage operations."""
+
     def __init__(self) -> None:
         settings = get_settings()
         self._client = Minio(
@@ -103,11 +105,11 @@ class MinIOClient:
 
 
 # ── Singleton ────────────────────────────────────────────────
-_minio_client: Optional[MinIOClient] = None
+_repo: Optional[StorageRepository] = None
 
 
-def get_minio_client() -> MinIOClient:
-    global _minio_client
-    if _minio_client is None:
-        _minio_client = MinIOClient()
-    return _minio_client
+def get_storage_repo() -> StorageRepository:
+    global _repo
+    if _repo is None:
+        _repo = StorageRepository()
+    return _repo

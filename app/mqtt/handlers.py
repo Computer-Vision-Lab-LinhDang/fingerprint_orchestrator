@@ -8,17 +8,15 @@ from typing import Optional
 
 import aiomqtt
 
-from app.schemas.payload import (
+from app.schemas.mqtt_payloads import (
     HeartbeatPayload,
     TaskResult,
     WorkerStatus,
 )
-from app.managers.worker_manager import get_worker_manager
+from app.services.worker_service import get_worker_service
+from app.services.task_service import store_result
 
 logger = logging.getLogger(__name__)
-
-# Pending results — store results until workflow retrieves them
-_pending_results: dict[str, TaskResult] = {}
 
 # ── File logger setup ────────────────────────────────────────
 LOG_DIR = os.path.join(os.getcwd(), "logs")
@@ -75,8 +73,8 @@ async def _handle_heartbeat(worker_id: str, message: aiomqtt.Message) -> None:
         data = json.loads(message.payload.decode())
         heartbeat = HeartbeatPayload(**data)
 
-        manager = get_worker_manager()
-        manager.update_heartbeat(
+        service = get_worker_service()
+        service.update_heartbeat(
             worker_id=worker_id,
             status=heartbeat.status,
             gpu_memory_used=heartbeat.gpu_memory_used_mb,
@@ -100,8 +98,8 @@ async def _handle_lwt(worker_id: str, message: aiomqtt.Message) -> None:
         payload = message.payload.decode() if message.payload else ""
         logger.warning("Worker '%s' OFFLINE (LWT): %s", worker_id, payload)
 
-        manager = get_worker_manager()
-        manager.mark_offline(worker_id)
+        service = get_worker_service()
+        service.mark_offline(worker_id)
 
         _write_log("lwt_offline", worker_id, {"raw_payload": payload})
 
@@ -136,14 +134,14 @@ async def _handle_task_result(task_id: str, message: aiomqtt.Message) -> None:
         data = json.loads(message.payload.decode())
         result = TaskResult(**data)
 
-        _pending_results[task_id] = result
+        store_result(task_id, result)
         logger.info(
             "Task result '%s' from worker '%s': %s",
             task_id, result.worker_id, result.status.value,
         )
 
-        manager = get_worker_manager()
-        manager.update_heartbeat(
+        service = get_worker_service()
+        service.update_heartbeat(
             worker_id=result.worker_id,
             status=WorkerStatus.IDLE,
         )
@@ -157,12 +155,3 @@ async def _handle_task_result(task_id: str, message: aiomqtt.Message) -> None:
 
     except Exception as exc:
         logger.error("Error processing result for task '%s': %s", task_id, exc)
-
-
-# ── Helper functions for workflow ────────────────────────────
-def get_task_result(task_id: str) -> Optional[TaskResult]:
-    return _pending_results.get(task_id)
-
-
-def pop_task_result(task_id: str) -> Optional[TaskResult]:
-    return _pending_results.pop(task_id, None)

@@ -6,8 +6,9 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Request
 
-from app.schemas.api_models import RegisterRequest, RegisterResponse
-from app.workflows.registration import register_fingerprint
+from app.schemas.requests import RegisterRequest
+from app.schemas.responses import RegisterResponse
+from app.services.registration_service import register_fingerprint
 from app.core.exceptions import (
     NoWorkerAvailableError,
     TaskTimeoutError,

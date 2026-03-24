@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Optional
 
 import aiomqtt
 
 from app.core.config import get_settings
-from app.schemas.payload import TaskPayload, MatchPayload, TaskType
+from app.schemas.mqtt_payloads import TaskPayload, MatchPayload, TaskType
 
 logger = logging.getLogger(__name__)
 

@@ -6,8 +6,9 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Request
 
-from app.schemas.api_models import VerifyRequest, VerifyResponse, MatchItem
-from app.workflows.verification import verify_fingerprint
+from app.schemas.requests import VerifyRequest
+from app.schemas.responses import VerifyResponse, MatchItem
+from app.services.verification_service import verify_fingerprint
 from app.core.exceptions import (
     NoWorkerAvailableError,
     TaskTimeoutError,

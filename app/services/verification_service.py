@@ -1,4 +1,4 @@
-# TODO: Verification workflow — not yet implemented
+# TODO: Verification service — not yet implemented
 #
 # Full pipeline when ready:
 #   Step 1: Upload fingerprint image to MinIO
@@ -8,10 +8,10 @@
 #   Step 5: Return matching results
 #
 # Dependencies needed:
-#   - MinIO client (app/clients/minio_client.py)
-#   - DB client (app/clients/db_client.py)
-#   - MQTT publisher (app/mqtt/publisher.py)
-#   - Worker manager (app/managers/worker_manager.py)
+#   - StorageRepository (app/repositories/storage_repo.py)
+#   - FingerprintRepository (app/repositories/fingerprint_repo.py)
+#   - MQTTPublisher (app/mqtt/publisher.py)
+#   - WorkerService (app/services/worker_service.py)
 
 import logging
 

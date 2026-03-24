@@ -2,28 +2,19 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
 from typing import Optional
 
 from app.core.config import get_settings
 from app.core.exceptions import NoWorkerAvailableError
-from app.schemas.payload import WorkerStatus
+from app.models.worker import WorkerInfo
+from app.schemas.mqtt_payloads import WorkerStatus
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class WorkerInfo:
-    worker_id: str
-    status: WorkerStatus = WorkerStatus.OFFLINE
-    last_heartbeat: float = 0.0
-    gpu_memory_used_mb: Optional[float] = None
-    gpu_memory_total_mb: Optional[float] = None
-    current_task_id: Optional[str] = None
-    task_count: int = 0
+class WorkerService:
+    """Business logic for managing connected GPU workers."""
 
-
-class WorkerManager:
     def __init__(self) -> None:
         self._workers: dict[str, WorkerInfo] = {}
         self._settings = get_settings()
@@ -131,11 +122,11 @@ class WorkerManager:
 
 
 # ── Singleton ────────────────────────────────────────────────
-_manager: Optional[WorkerManager] = None
+_service: Optional[WorkerService] = None
 
 
-def get_worker_manager() -> WorkerManager:
-    global _manager
-    if _manager is None:
-        _manager = WorkerManager()
-    return _manager
+def get_worker_service() -> WorkerService:
+    global _service
+    if _service is None:
+        _service = WorkerService()
+    return _service

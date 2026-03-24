@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import signal
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -11,7 +10,8 @@ from fastapi import FastAPI
 from app.core.config import get_settings
 from app.mqtt.broker import get_mqtt_broker
 from app.mqtt.handlers import on_message
-from app.managers.worker_manager import get_worker_manager
+from app.services.worker_service import get_worker_service
+from app.routes.health import router as health_router
 
 logger = logging.getLogger(__name__)
 
@@ -30,17 +30,17 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 Starting %s ...", settings.APP_NAME)
 
     # TODO: Initialize MinIO buckets
-    # from app.clients.minio_client import get_minio_client
+    # from app.repositories.storage_repo import get_storage_repo
     # try:
-    #     minio = get_minio_client()
-    #     minio.ensure_buckets()
+    #     storage = get_storage_repo()
+    #     storage.ensure_buckets()
     #     logger.info("✅ MinIO ready")
     # except Exception as exc:
     #     logger.error("❌ MinIO error: %s", exc)
 
     # TODO: Connect to Database (PostgreSQL + pgvector)
-    # from app.clients.db_client import get_db_client
-    # db = get_db_client()
+    # from app.db.database import get_database
+    # db = get_database()
     # try:
     #     await db.connect()
     #     await db.init_schema()
@@ -98,28 +98,14 @@ app = FastAPI(
 
 app.state.mqtt_client = None
 
+# ── Routes ───────────────────────────────────────────────────
+app.include_router(health_router)
+
 # TODO: Include API routers when ready
-# from app.api.routes_register import router as register_router
-# from app.api.routes_verify import router as verify_router
+# from app.routes.register import router as register_router
+# from app.routes.verify import router as verify_router
 # app.include_router(register_router, prefix="/api/v1")
 # app.include_router(verify_router, prefix="/api/v1")
-
-
-# ── Health check ─────────────────────────────────────────────
-@app.get("/health", tags=["System"])
-async def health():
-    manager = get_worker_manager()
-    return {
-        "status": "ok",
-        "active_workers": manager.active_count,
-        "mqtt_connected": app.state.mqtt_client is not None,
-    }
-
-
-@app.get("/workers", tags=["System"])
-async def list_workers():
-    manager = get_worker_manager()
-    return {"workers": manager.get_summary()}
 
 
 # ── Run ──────────────────────────────────────────────────────
