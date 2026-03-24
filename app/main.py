@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -110,13 +111,19 @@ app.include_router(health_router)
 
 # ── Run ──────────────────────────────────────────────────────
 if __name__ == "__main__":
-    settings = get_settings()
-    try:
-        uvicorn.run(
-            "app.main:app",
-            host=settings.APP_HOST,
-            port=settings.APP_PORT,
-            reload=settings.DEBUG,
-        )
-    except KeyboardInterrupt:
-        print("\n👋 Bye!")
+    cli_mode = "--cli" in sys.argv
+
+    if cli_mode:
+        from app.cli import run_cli
+        run_cli()
+    else:
+        settings = get_settings()
+        try:
+            uvicorn.run(
+                "app.main:app",
+                host=settings.APP_HOST,
+                port=settings.APP_PORT,
+                reload=settings.DEBUG,
+            )
+        except KeyboardInterrupt:
+            print("\n👋 Bye!")
