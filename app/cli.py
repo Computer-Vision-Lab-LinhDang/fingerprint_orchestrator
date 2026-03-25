@@ -9,6 +9,8 @@ from threading import Lock
 from typing import Optional
 
 import paho.mqtt.client as mqtt
+from minio import Minio
+from minio.error import S3Error
 
 from app.core.config import get_settings
 
@@ -94,6 +96,7 @@ def _on_connect(client, userdata, flags, *args):
         client.subscribe("worker/+/heartbeat", qos=1)
         client.subscribe("worker/+/status", qos=1)
         client.subscribe("worker/+/message", qos=1)
+        client.subscribe("worker/+/model/status", qos=1)
         client.subscribe("result/+", qos=1)
     else:
         _connected = False
@@ -121,6 +124,7 @@ def _on_message(client, userdata, message: mqtt.MQTTMessage):
         worker_id = parts[1]
         _stats["heartbeats"] += 1
         with _lock:
+            loaded_models = data.get("loaded_models", {})
             _workers[worker_id] = {
                 "status": data.get("status", "unknown"),
                 "last_seen": time.time(),
@@ -128,6 +132,7 @@ def _on_message(client, userdata, message: mqtt.MQTTMessage):
                 "current_task": data.get("current_task_id"),
                 "gpu_used": data.get("gpu_memory_used_mb"),
                 "gpu_total": data.get("gpu_memory_total_mb"),
+                "loaded_models": loaded_models,
             }
         _add_log("heartbeat", worker_id, {"status": data.get("status")})
         _write_log("heartbeat", worker_id, {"status": data.get("status")})
@@ -236,6 +241,8 @@ def print_menu():
     print(f"  {C.BOLD}[6]{C.RESET}  ⚙️   Current Configuration")
     print(f"  {C.BOLD}[7]{C.RESET}  🔄  Reconnect MQTT")
     print(f"  {C.BOLD}[8]{C.RESET}  🧹  Clear Screen")
+    print(f"  {C.BOLD}[9]{C.RESET}  🧠  MinIO Models")
+    print(f"  {C.BOLD}[10]{C.RESET} 🚀  Deploy Model to Worker")
     print(f"  {C.BOLD}[0]{C.RESET}  🚪  Exit")
     print(f"  {C.YELLOW}{'─' * 48}{C.RESET}")
 
@@ -248,8 +255,8 @@ def show_workers():
         print(f"  {C.DIM}No workers detected yet. Waiting for heartbeats...{C.RESET}")
         return
 
-    print(f"  {C.DIM}{'Worker ID':<20} {'Status':<12} {'Last Seen':<14} {'Uptime':<12} {'Task'}{C.RESET}")
-    print(f"  {C.DIM}{'─' * 70}{C.RESET}")
+    print(f"  {C.DIM}{'Worker ID':<20} {'Status':<10} {'Last Seen':<12} {'Models'}{C.RESET}")
+    print(f"  {C.DIM}{'─' * 75}{C.RESET}")
 
     for wid, info in _workers.items():
         status = info.get("status", "unknown")
@@ -260,12 +267,18 @@ def show_workers():
         else:
             s_color = C.RED
 
-        uptime = info.get("uptime")
-        uptime_str = f"{int(uptime)}s" if uptime else "—"
-        task = info.get("current_task") or "—"
         last = fmt_ago(info.get("last_seen"))
 
-        print(f"  {C.WHITE}{wid:<20}{C.RESET} {s_color}{status:<12}{C.RESET} {last:<14} {uptime_str:<12} {task}")
+        # Format loaded models
+        loaded = info.get("loaded_models", {})
+        if loaded:
+            models_str = ", ".join(
+                f"{C.MAGENTA}{v}{C.RESET}" for v in loaded.values()
+            )
+        else:
+            models_str = f"{C.DIM}(none){C.RESET}"
+
+        print(f"  {C.WHITE}{wid:<20}{C.RESET} {s_color}{status:<10}{C.RESET} {last:<12} {models_str}")
 
     print()
 
@@ -412,6 +425,249 @@ def show_config():
     print()
 
 
+# ── [9] MinIO Models ────────────────────────────────────────
+def _get_minio_client() -> Minio:
+    settings = get_settings()
+    return Minio(
+        endpoint=settings.MINIO_ENDPOINT,
+        access_key=settings.MINIO_ACCESS_KEY,
+        secret_key=settings.MINIO_SECRET_KEY,
+        secure=settings.MINIO_SECURE,
+    )
+
+
+def _fmt_size(size_bytes: int) -> str:
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    elif size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+
+def show_minio_models():
+    settings = get_settings()
+    print(f"\n  {C.CYAN}{C.BOLD}═══ MinIO MODELS ═══{C.RESET}")
+    print(f"  {C.DIM}Endpoint: {settings.MINIO_ENDPOINT}  │  Bucket: {settings.MINIO_BUCKET_MODELS}{C.RESET}\n")
+
+    try:
+        client = _get_minio_client()
+    except Exception as exc:
+        print(f"  {C.RED}✗ Cannot connect to MinIO: {exc}{C.RESET}")
+        return
+
+    model_types = ["embedding", "matching", "pad"]
+    total_models = 0
+
+    for mtype in model_types:
+        # List objects under this type prefix
+        try:
+            objects = list(client.list_objects(
+                settings.MINIO_BUCKET_MODELS,
+                prefix=f"{mtype}/",
+                recursive=True,
+            ))
+        except S3Error as exc:
+            print(f"  {C.RED}✗ Error listing {mtype}: {exc}{C.RESET}")
+            continue
+
+        # Filter out .keep files
+        files = [obj for obj in objects if not obj.object_name.endswith(".keep")]
+
+        # Color per type
+        type_colors = {"embedding": C.MAGENTA, "matching": C.BLUE, "pad": C.YELLOW}
+        tc = type_colors.get(mtype, C.WHITE)
+
+        print(f"  {tc}{C.BOLD}┌─ {mtype.upper()}{C.RESET}  {C.DIM}({len(files)} file{'s' if len(files) != 1 else ''}){C.RESET}")
+
+        if not files:
+            print(f"  {tc}│{C.RESET}  {C.DIM}(empty — upload models to {mtype}/<name>_v<ver>/model.onnx){C.RESET}")
+            print(f"  {tc}└{'─' * 50}{C.RESET}")
+            print()
+            continue
+
+        # Group by version folder: embedding/embedding_v1/model.onnx → embedding_v1
+        versions: dict[str, list] = {}
+        for obj in files:
+            parts = obj.object_name.split("/")
+            ver = parts[1] if len(parts) >= 2 else "(root)"
+            versions.setdefault(ver, []).append(obj)
+
+        for ver, ver_files in versions.items():
+            print(f"  {tc}│{C.RESET}")
+            print(f"  {tc}├── {C.BOLD}{ver}{C.RESET}")
+
+            for obj in ver_files:
+                fname = obj.object_name.split("/")[-1]
+                size = _fmt_size(obj.size) if obj.size else "—"
+                modified = obj.last_modified.strftime("%Y-%m-%d %H:%M") if obj.last_modified else "—"
+                print(f"  {tc}│{C.RESET}     📦 {C.WHITE}{fname}{C.RESET}  {C.DIM}({size}  •  {modified}){C.RESET}")
+                total_models += 1
+
+        print(f"  {tc}└{'─' * 50}{C.RESET}")
+        print()
+
+    print(f"  {C.DIM}Total model files: {total_models}{C.RESET}")
+    print(f"  {C.DIM}Upload via MinIO Console: http://{settings.MINIO_ENDPOINT.replace(':9000', ':9001')}{C.RESET}")
+    print()
+
+
+# ── [10] Deploy Model to Worker ─────────────────────────────
+def deploy_model_to_worker():
+    settings = get_settings()
+    print(f"\n  {C.CYAN}{C.BOLD}═══ DEPLOY MODEL TO WORKER ═══{C.RESET}\n")
+
+    if not _connected:
+        print(f"  {C.RED}✗ Not connected to MQTT!{C.RESET}")
+        return
+
+    # 1. Show available workers
+    online_workers = [
+        (wid, info) for wid, info in _workers.items()
+        if info.get("status") in ("idle", "online", "busy")
+    ]
+    if not online_workers:
+        print(f"  {C.RED}✗ No online workers available.{C.RESET}")
+        return
+
+    print(f"  {C.DIM}Available workers:{C.RESET}")
+    for i, (wid, info) in enumerate(online_workers, 1):
+        status = info.get("status", "unknown")
+        loaded = info.get("loaded_models", {})
+        models_str = ", ".join(loaded.values()) if loaded else "(none)"
+        print(f"    {C.BOLD}[{i}]{C.RESET} {wid} ({status}) ─ models: {models_str}")
+
+    print()
+    try:
+        idx = int(input(f"  {C.YELLOW}▸ Select worker [1-{len(online_workers)}]: {C.RESET}").strip()) - 1
+        if idx < 0 or idx >= len(online_workers):
+            print(f"  {C.RED}✗ Invalid selection{C.RESET}")
+            return
+    except (ValueError, EOFError):
+        print(f"  {C.RED}✗ Invalid input{C.RESET}")
+        return
+
+    target_worker_id = online_workers[idx][0]
+
+    # 2. Connect to MinIO and list model types
+    try:
+        minio_client = _get_minio_client()
+    except Exception as exc:
+        print(f"  {C.RED}✗ Cannot connect to MinIO: {exc}{C.RESET}")
+        return
+
+    model_types = ["embedding", "matching", "pad"]
+    print(f"\n  {C.DIM}Model types:{C.RESET}")
+    for i, mt in enumerate(model_types, 1):
+        print(f"    {C.BOLD}[{i}]{C.RESET} {mt}")
+
+    try:
+        mt_idx = int(input(f"  {C.YELLOW}▸ Select type [1-{len(model_types)}]: {C.RESET}").strip()) - 1
+        if mt_idx < 0 or mt_idx >= len(model_types):
+            print(f"  {C.RED}✗ Invalid selection{C.RESET}")
+            return
+    except (ValueError, EOFError):
+        print(f"  {C.RED}✗ Invalid input{C.RESET}")
+        return
+
+    selected_type = model_types[mt_idx]
+
+    # 3. List available models for this type
+    try:
+        objects = list(minio_client.list_objects(
+            settings.MINIO_BUCKET_MODELS,
+            prefix=f"{selected_type}/",
+            recursive=True,
+        ))
+        # Filter .keep and group by version folder
+        model_files = [
+            obj for obj in objects
+            if not obj.object_name.endswith(".keep")
+            and obj.object_name.endswith(".onnx")
+        ]
+    except Exception as exc:
+        print(f"  {C.RED}✗ Error listing models: {exc}{C.RESET}")
+        return
+
+    if not model_files:
+        print(f"  {C.RED}✗ No .onnx models found in {selected_type}/ on MinIO{C.RESET}")
+        print(f"  {C.DIM}Upload models via MinIO Console: http://{settings.MINIO_ENDPOINT.replace(':9000', ':9001')}{C.RESET}")
+        return
+
+    print(f"\n  {C.DIM}Available models ({selected_type}):{C.RESET}")
+    for i, obj in enumerate(model_files, 1):
+        size = _fmt_size(obj.size) if obj.size else "—"
+        # Extract model name from path: embedding/embedding_v1/model.onnx → embedding_v1
+        parts = obj.object_name.split("/")
+        display_name = parts[1] if len(parts) >= 2 else obj.object_name
+        print(f"    {C.BOLD}[{i}]{C.RESET} {display_name}  {C.DIM}({size}){C.RESET}")
+
+    try:
+        m_idx = int(input(f"  {C.YELLOW}▸ Select model [1-{len(model_files)}]: {C.RESET}").strip()) - 1
+        if m_idx < 0 or m_idx >= len(model_files):
+            print(f"  {C.RED}✗ Invalid selection{C.RESET}")
+            return
+    except (ValueError, EOFError):
+        print(f"  {C.RED}✗ Invalid input{C.RESET}")
+        return
+
+    selected_model = model_files[m_idx]
+    s3_path = selected_model.object_name
+    path_parts = s3_path.split("/")
+    model_name = path_parts[1] if len(path_parts) >= 2 else s3_path
+    # Extract version: embedding_v1 → v1
+    version = model_name.split("_")[-1] if "_" in model_name else "unknown"
+
+    # 4. Generate presigned URL (using public endpoint if configured)
+    try:
+        from datetime import timedelta
+        # If workers are remote, use public endpoint for signing
+        if settings.MINIO_PUBLIC_ENDPOINT:
+            public_client = Minio(
+                endpoint=settings.MINIO_PUBLIC_ENDPOINT,
+                access_key=settings.MINIO_ACCESS_KEY,
+                secret_key=settings.MINIO_SECRET_KEY,
+                secure=settings.MINIO_SECURE,
+            )
+            download_url = public_client.presigned_get_object(
+                settings.MINIO_BUCKET_MODELS,
+                s3_path,
+                expires=timedelta(hours=2),
+            )
+        else:
+            download_url = minio_client.presigned_get_object(
+                settings.MINIO_BUCKET_MODELS,
+                s3_path,
+                expires=timedelta(hours=2),
+            )
+    except Exception as exc:
+        print(f"  {C.RED}✗ Failed to create presigned URL: {exc}{C.RESET}")
+        return
+
+    # 5. Publish model update command via MQTT
+    payload = json.dumps({
+        "model_type": selected_type,
+        "model_name": model_name,
+        "version": version,
+        "download_url": download_url,
+        "s3_path": s3_path,
+    })
+
+    topic = f"task/{target_worker_id}/model/update"
+    client = _get_client()
+    result = client.publish(topic, payload, qos=1)
+
+    if result.rc == mqtt.MQTT_ERR_SUCCESS:
+        print(f"\n  {C.GREEN}✓ Deploy command sent!{C.RESET}")
+        print(f"    Worker  : {target_worker_id}")
+        print(f"    Model   : {selected_type}/{model_name}")
+        print(f"    Topic   : {topic}")
+        print(f"  {C.DIM}Worker is downloading the model...{C.RESET}")
+    else:
+        print(f"  {C.RED}✗ Failed to send deploy command{C.RESET}")
+
+
 # ── [7] Reconnect ───────────────────────────────────────────
 def reconnect():
     print(f"\n  {C.CYAN}{C.BOLD}═══ RECONNECT ═══{C.RESET}\n")
@@ -462,12 +718,14 @@ def run_cli():
         "6": show_config,
         "7": reconnect,
         "8": lambda: (clear_screen(), print_banner()),
+        "9": show_minio_models,
+        "10": deploy_model_to_worker,
     }
 
     while True:
         print_menu()
         try:
-            choice = input(f"\n  {C.YELLOW}{C.BOLD}▸ Select [0-8]: {C.RESET}").strip()
+            choice = input(f"\n  {C.YELLOW}{C.BOLD}▸ Select [0-10]: {C.RESET}").strip()
         except (KeyboardInterrupt, EOFError):
             choice = "0"
 

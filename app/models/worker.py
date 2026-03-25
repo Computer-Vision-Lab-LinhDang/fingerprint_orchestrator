@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from app.schemas.mqtt_payloads import WorkerStatus
@@ -16,3 +16,4 @@ class WorkerInfo:
     gpu_memory_total_mb: Optional[float] = None
     current_task_id: Optional[str] = None
     task_count: int = 0
+    loaded_models: dict = field(default_factory=dict)  # {"embedding": "embedding_v1", ...}

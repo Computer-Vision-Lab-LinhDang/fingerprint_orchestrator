@@ -11,6 +11,7 @@ import aiomqtt
 from app.schemas.mqtt_payloads import (
     HeartbeatPayload,
     TaskResult,
+    ModelStatusReport,
     WorkerStatus,
 )
 from app.services.worker_service import get_worker_service
@@ -57,6 +58,10 @@ async def on_message(message: aiomqtt.Message) -> None:
         elif len(parts) >= 3 and parts[0] == "worker" and parts[2] == "message":
             await _handle_worker_message(parts[1], message)
 
+        elif len(parts) >= 3 and parts[0] == "worker" and parts[2] == "model":
+            if len(parts) >= 4 and parts[3] == "status":
+                await _handle_model_status(parts[1], message)
+
         elif len(parts) >= 2 and parts[0] == "result":
             await _handle_task_result(parts[1], message)
 
@@ -80,6 +85,7 @@ async def _handle_heartbeat(worker_id: str, message: aiomqtt.Message) -> None:
             gpu_memory_used=heartbeat.gpu_memory_used_mb,
             gpu_memory_total=heartbeat.gpu_memory_total_mb,
             current_task_id=heartbeat.current_task_id,
+            loaded_models=heartbeat.loaded_models,
         )
         logger.debug("Heartbeat from worker '%s': %s", worker_id, heartbeat.status.value)
 
@@ -155,3 +161,32 @@ async def _handle_task_result(task_id: str, message: aiomqtt.Message) -> None:
 
     except Exception as exc:
         logger.error("Error processing result for task '%s': %s", task_id, exc)
+
+
+# ── Model Status (Worker → Orchestrator) ────────────────────
+async def _handle_model_status(worker_id: str, message: aiomqtt.Message) -> None:
+    try:
+        data = json.loads(message.payload.decode())
+        report = ModelStatusReport(**data)
+
+        status_icon = "✅" if report.status == "ready" else "❌" if report.status == "failed" else "⬇️"
+        logger.info(
+            "%s Model %s/%s on worker '%s': %s%s",
+            status_icon,
+            report.model_type,
+            report.model_name,
+            worker_id,
+            report.status,
+            f" - {report.error}" if report.error else "",
+        )
+
+        _write_log("model_status", worker_id, {
+            "model_type": report.model_type,
+            "model_name": report.model_name,
+            "version": report.version,
+            "status": report.status,
+            "error": report.error,
+        })
+
+    except Exception as exc:
+        logger.error("Error processing model status from '%s': %s", worker_id, exc)

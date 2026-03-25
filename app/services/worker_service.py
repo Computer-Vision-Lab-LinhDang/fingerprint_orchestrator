@@ -41,6 +41,7 @@ class WorkerService:
         gpu_memory_used: Optional[float] = None,
         gpu_memory_total: Optional[float] = None,
         current_task_id: Optional[str] = None,
+        loaded_models: Optional[dict] = None,
     ) -> None:
         now = time.time()
 
@@ -54,6 +55,8 @@ class WorkerService:
         worker.gpu_memory_used_mb = gpu_memory_used
         worker.gpu_memory_total_mb = gpu_memory_total
         worker.current_task_id = current_task_id
+        if loaded_models is not None:
+            worker.loaded_models = loaded_models
 
     # ── Offline ──────────────────────────────────────────────
     def mark_offline(self, worker_id: str) -> None:
@@ -116,6 +119,7 @@ class WorkerService:
                 "gpu_memory_total_mb": w.gpu_memory_total_mb,
                 "current_task_id": w.current_task_id,
                 "task_count": w.task_count,
+                "loaded_models": w.loaded_models,
             }
             for w in self._workers.values()
         ]

@@ -32,20 +32,21 @@ class Settings(BaseSettings):
     # ── Worker Management ────────────────────────────────────
     WORKER_HEARTBEAT_TIMEOUT: int = 30
 
-    # TODO: MinIO settings (uncomment when ready)
-    # MINIO_ENDPOINT: str = "192.168.1.100:9000"
-    # MINIO_ACCESS_KEY: str = "minioadmin"
-    # MINIO_SECRET_KEY: str = "minioadmin"
-    # MINIO_BUCKET_MODELS: str = "fingerprint-models"
-    # MINIO_BUCKET_IMAGES: str = "fingerprint-images"
-    # MINIO_SECURE: bool = False
+    # ── MinIO (Object Storage) ──────────────────────────────
+    MINIO_ENDPOINT: str = "localhost:9000"
+    MINIO_PUBLIC_ENDPOINT: str = ""  # IP workers use to reach MinIO (e.g. "100.106.35.45:9000")
+    MINIO_ACCESS_KEY: str = "minioadmin"
+    MINIO_SECRET_KEY: str = "minioadmin123"
+    MINIO_BUCKET_MODELS: str = "fingerprint-models"
+    MINIO_BUCKET_IMAGES: str = "fingerprint-images"
+    MINIO_SECURE: bool = False
 
-    # TODO: Database settings (uncomment when ready)
-    # DB_HOST: str = "localhost"
-    # DB_PORT: int = 5432
-    # DB_USER: str = "postgres"
-    # DB_PASSWORD: str = "postgres"
-    # DB_NAME: str = "fingerprint_db"
+    # ── Database (PostgreSQL + pgvector) ─────────────────────
+    DB_HOST: str = "localhost"
+    DB_PORT: int = 5433
+    DB_USER: str = "fingerprint"
+    DB_PASSWORD: str = "fingerprint123"
+    DB_NAME: str = "fingerprint_db"
 
 
 @lru_cache()

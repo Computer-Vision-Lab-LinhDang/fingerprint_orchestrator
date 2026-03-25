@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 
 
 # ── Enums ────────────────────────────────────────────────────
+# Note: We use model_config to disable protected namespace warnings
+# because our domain uses "model_type" and "model_name" fields.
 class TaskType(str, Enum):
     EMBED = "embed"
     MATCH = "match"
@@ -30,12 +32,34 @@ class WorkerStatus(str, Enum):
 
 # ── Outgoing payloads (Orchestrator → Worker) ────────────────
 class TaskPayload(BaseModel):
+    model_config = {"protected_namespaces": ()}
     task_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     task_type: TaskType
     image_url: str = Field(..., description="Fingerprint image URL on MinIO")
     model_name: str = Field(default="default", description="Embedding model name")
     extra: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ModelUpdateCommand(BaseModel):
+    """Orchestrator → Worker: command to download a new model."""
+    model_config = {"protected_namespaces": ()}
+    model_type: str = Field(..., description="embedding, matching, or pad")
+    model_name: str = Field(..., description="e.g. embedding_v1")
+    version: str = Field(..., description="e.g. v1")
+    download_url: str = Field(..., description="Presigned URL to download model")
+    s3_path: str = Field(default="", description="Original S3 path")
+
+
+class ModelStatusReport(BaseModel):
+    """Worker → Orchestrator: model download status report."""
+    model_config = {"protected_namespaces": ()}
+    worker_id: str
+    model_type: str
+    model_name: str
+    version: str
+    status: str  # "downloading", "ready", "failed"
+    error: Optional[str] = None
 
 
 class MatchPayload(BaseModel):
@@ -89,4 +113,5 @@ class HeartbeatPayload(BaseModel):
     gpu_memory_total_mb: Optional[float] = None
     current_task_id: Optional[str] = None
     uptime_seconds: Optional[float] = None
+    loaded_models: dict[str, str] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=datetime.utcnow)

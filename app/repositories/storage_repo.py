@@ -1,4 +1,4 @@
-# TODO: Storage repository — enable when MinIO is ready
+# Storage repository for MinIO object storage
 
 from __future__ import annotations
 
@@ -41,26 +41,30 @@ class StorageRepository:
             except S3Error as exc:
                 raise StorageError(f"Failed to create bucket '{bucket}': {exc}") from exc
 
-    # ── Upload image ─────────────────────────────────────────
+    # ── Upload image (flat / data lake) ────────────────────────
     def upload_image(
         self,
-        object_name: str,
+        filename: str,
         image_base64: str,
         content_type: str = "image/png",
     ) -> str:
-        """Upload base64-encoded fingerprint image to MinIO. Returns object_name."""
+        """
+        Upload base64-encoded fingerprint image to MinIO (flat, data lake).
+        Images are stored directly in the bucket root: fingerprint-images/{filename}
+        Returns the object name.
+        """
         try:
             image_bytes = base64.b64decode(image_base64)
             data = io.BytesIO(image_bytes)
             self._client.put_object(
                 bucket_name=self._bucket_images,
-                object_name=object_name,
+                object_name=filename,
                 data=data,
                 length=len(image_bytes),
                 content_type=content_type,
             )
-            logger.info("Uploaded image: %s/%s", self._bucket_images, object_name)
-            return object_name
+            logger.info("Uploaded image: %s/%s", self._bucket_images, filename)
+            return filename
         except Exception as exc:
             raise StorageError(f"Image upload failed: {exc}") from exc
 
@@ -83,22 +87,33 @@ class StorageRepository:
             raise StorageError(f"Failed to create presigned URL: {exc}") from exc
 
     # ── Model management ─────────────────────────────────────
+    # Path convention: {type}/{name}_v{version}/model.onnx
+    #   e.g. embedding/embedding_v1/model.onnx
+    #        matching/matching_v1/model.onnx
+    #        pad/pad_v1/model.onnx
+
     def get_model_url(
         self,
-        model_name: str,
+        s3_path: str,
         expires: timedelta = timedelta(hours=2),
     ) -> str:
-        """Generate download URL for model file."""
+        """Generate presigned download URL for a model file by its s3_path."""
         return self.get_presigned_url(
-            object_name=model_name,
+            object_name=s3_path,
             bucket=self._bucket_models,
             expires=expires,
         )
 
-    def list_models(self) -> list[str]:
-        """List available models on MinIO."""
+    def list_models(self, model_type: Optional[str] = None) -> list[str]:
+        """
+        List available models on MinIO.
+        If model_type is provided (e.g. 'embedding'), only list models under that prefix.
+        """
         try:
-            objects = self._client.list_objects(self._bucket_models)
+            prefix = f"{model_type}/" if model_type else None
+            objects = self._client.list_objects(
+                self._bucket_models, prefix=prefix, recursive=True
+            )
             return [obj.object_name for obj in objects]
         except S3Error as exc:
             raise StorageError(f"Failed to list models: {exc}") from exc
