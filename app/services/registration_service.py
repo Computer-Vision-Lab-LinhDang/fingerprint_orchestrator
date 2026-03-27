@@ -186,33 +186,38 @@ async def handle_embed_result(task_id: str, result: dict) -> Optional[dict]:
     username = registration["username"]
     fullname = registration["fullname"]
 
-    # Check if user exists by looking for any fingerprints with this user_id
-    # If not, we'll rely on the DB's foreign key — we need to create user first
     from app.db.database import get_database
     db = get_database()
     async with db.acquire() as conn:
+        # Look up by username
         existing_user = await conn.fetchrow(
-            "SELECT 1 FROM users WHERE user_id = $1", username
+            "SELECT user_id FROM users WHERE username = $1", username
         )
-        if not existing_user:
+        if existing_user:
+            user_id = existing_user["user_id"]
+        else:
+            # Generate UUID for new user
+            user_id = str(uuid.uuid4())
             await conn.execute(
                 """
-                INSERT INTO users (user_id, name, metadata)
-                VALUES ($1, $2, '{}'::jsonb)
+                INSERT INTO users (user_id, username, name, metadata)
+                VALUES ($1, $2, $3, '{}'::jsonb)
                 """,
+                user_id,
                 username,
                 fullname,
             )
-            logger.info("Created user: %s (%s)", username, fullname)
+            logger.info("Created user: %s (username=%s, id=%s)", fullname, username, user_id)
 
     # Save fingerprint
     fingerprint_id = "fp_" + str(uuid.uuid4())[:8]
     await fp_repo.save(
         fingerprint_id=fingerprint_id,
-        user_id=username,
+        user_id=user_id,
         finger_id=registration["finger_type"],
         embedding=vector,
         model_name=model_name,
+        image_path=registration.get("image_path", ""),
     )
 
     logger.info(

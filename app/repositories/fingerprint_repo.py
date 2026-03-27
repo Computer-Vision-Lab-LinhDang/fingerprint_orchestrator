@@ -24,6 +24,7 @@ class FingerprintRepository:
         finger_id: str,
         embedding: list[float],
         model_name: str = "default",
+        image_path: str = "",
         metadata: Optional[dict[str, Any]] = None,
     ) -> str:
         try:
@@ -32,17 +33,19 @@ class FingerprintRepository:
                 await conn.execute(
                     """
                     INSERT INTO fingerprints
-                        (fingerprint_id, user_id, finger_type, embedding, model_version)
-                    VALUES ($1, $2, $3, $4::vector, $5)
+                        (fingerprint_id, user_id, finger_type, embedding, model_version, image_path)
+                    VALUES ($1, $2, $3, $4::vector, $5, $6)
                     ON CONFLICT (fingerprint_id) DO UPDATE SET
                         embedding      = EXCLUDED.embedding,
-                        model_version  = EXCLUDED.model_version
+                        model_version  = EXCLUDED.model_version,
+                        image_path     = EXCLUDED.image_path
                     """,
                     fingerprint_id,
                     user_id,
                     finger_id,
                     vector_str,
                     model_name,
+                    image_path,
                 )
                 logger.info("Saved fingerprint: %s (user=%s)", fingerprint_id, user_id)
                 return fingerprint_id

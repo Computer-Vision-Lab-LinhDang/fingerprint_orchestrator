@@ -215,6 +215,16 @@ async def _handle_model_status(worker_id: str, message: aiomqtt.Message) -> None
             f" - {report.error}" if report.error else "",
         )
 
+        # Update worker's loaded_models when model is ready
+        if report.status == "ready":
+            worker_svc = get_worker_service()
+            if worker_id in worker_svc.workers:
+                worker_svc.workers[worker_id].loaded_models[report.model_type] = report.model_name
+                logger.info(
+                    "Updated worker '%s' loaded_models: %s → %s",
+                    worker_id, report.model_type, report.model_name,
+                )
+
         _write_log("model_status", worker_id, {
             "model_type": report.model_type,
             "model_name": report.model_name,
