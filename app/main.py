@@ -44,6 +44,7 @@ async def lifespan(app: FastAPI):
     db = get_database()
     try:
         await db.connect()
+        await db.init_schema()
         logger.info("✅ Database ready")
     except Exception as exc:
         logger.error("❌ Database error: %s", exc)

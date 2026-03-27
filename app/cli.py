@@ -234,15 +234,13 @@ def print_menu():
     print()
     print(f"  {C.YELLOW}{'─' * 48}{C.RESET}")
     print(f"  {C.BOLD}[1]{C.RESET}  🖥️   Connected Workers")
-    print(f"  {C.BOLD}[2]{C.RESET}  📋  Recent Event Log")
-    print(f"  {C.BOLD}[3]{C.RESET}  ✉️   Send Message to Worker")
-    print(f"  {C.BOLD}[4]{C.RESET}  📈  Statistics")
-    print(f"  {C.BOLD}[5]{C.RESET}  📄  View Log File")
-    print(f"  {C.BOLD}[6]{C.RESET}  ⚙️   Current Configuration")
-    print(f"  {C.BOLD}[7]{C.RESET}  🔄  Reconnect MQTT")
-    print(f"  {C.BOLD}[8]{C.RESET}  🧹  Clear Screen")
-    print(f"  {C.BOLD}[9]{C.RESET}  🧠  MinIO Models")
-    print(f"  {C.BOLD}[10]{C.RESET} 🚀  Deploy Model to Worker")
+    print(f"  {C.BOLD}[2]{C.RESET}  📋  Event Log")
+    print(f"  {C.BOLD}[3]{C.RESET}  📈  Statistics")
+    print(f"  {C.BOLD}[4]{C.RESET}  ⚙️   Current Configuration")
+    print(f"  {C.BOLD}[5]{C.RESET}  🔄  Reconnect MQTT")
+    print(f"  {C.BOLD}[6]{C.RESET}  🧹  Clear Screen")
+    print(f"  {C.BOLD}[7]{C.RESET}  🧠  MinIO Models")
+    print(f"  {C.BOLD}[8]{C.RESET}  🚀  Deploy Model to Worker")
     print(f"  {C.BOLD}[0]{C.RESET}  🚪  Exit")
     print(f"  {C.YELLOW}{'─' * 48}{C.RESET}")
 
@@ -285,82 +283,67 @@ def show_workers():
 
 # ── [2] Event Log ────────────────────────────────────────────
 def show_event_log():
-    print(f"\n  {C.CYAN}{C.BOLD}═══ RECENT EVENT LOG ═══{C.RESET}\n")
+    print(f"\n  {C.CYAN}{C.BOLD}═══ EVENT LOG ═══{C.RESET}\n")
 
+    # 1. In-memory recent events
     with _lock:
         logs = list(_message_log)
 
-    if not logs:
-        print(f"  {C.DIM}No events yet.{C.RESET}")
-        return
+    if logs:
+        print(f"  {C.BOLD}▸ Recent Events (in-memory){C.RESET}")
+        print(f"  {C.DIM}{'Time':<10} {'Type':<12} {'Worker':<20} {'Details'}{C.RESET}")
+        print(f"  {C.DIM}{'─' * 70}{C.RESET}")
 
-    print(f"  {C.DIM}{'Time':<10} {'Type':<12} {'Worker':<20} {'Details'}{C.RESET}")
-    print(f"  {C.DIM}{'─' * 70}{C.RESET}")
+        type_colors = {"heartbeat": C.DIM, "message": C.CYAN, "result": C.GREEN, "lwt": C.RED}
 
-    type_colors = {"heartbeat": C.DIM, "message": C.CYAN, "result": C.GREEN, "lwt": C.RED}
+        for ts, event_type, worker_id, data in logs[-15:]:
+            t = datetime.fromtimestamp(ts).strftime("%H:%M:%S")
+            color = type_colors.get(event_type, C.WHITE)
+            detail = ""
+            if event_type == "message":
+                detail = data.get("content", "")[:40]
+            elif event_type == "result":
+                detail = f"task={data.get('task_id', '')[:12]}  status={data.get('status', '')}"
+            elif event_type == "lwt":
+                detail = "OFFLINE (LWT)"
+            elif event_type == "heartbeat":
+                detail = data.get("status", "")
 
-    for ts, event_type, worker_id, data in logs[-20:]:
-        t = datetime.fromtimestamp(ts).strftime("%H:%M:%S")
-        color = type_colors.get(event_type, C.WHITE)
-        detail = ""
-        if event_type == "message":
-            detail = data.get("content", "")[:40]
-        elif event_type == "result":
-            detail = f"task={data.get('task_id', '')[:12]}  status={data.get('status', '')}"
-        elif event_type == "lwt":
-            detail = "OFFLINE (LWT)"
-        elif event_type == "heartbeat":
-            detail = data.get("status", "")
+            print(f"  {t:<10} {color}{event_type:<12}{C.RESET} {worker_id:<20} {detail}")
 
-        print(f"  {t:<10} {color}{event_type:<12}{C.RESET} {worker_id:<20} {detail}")
-
-    print(f"\n  {C.DIM}Showing {min(20, len(logs))}/{len(logs)} events{C.RESET}")
-
-
-# ── [3] Send Message to Worker ──────────────────────────────
-def send_message_to_worker():
-    print(f"\n  {C.CYAN}{C.BOLD}═══ SEND MESSAGE TO WORKER ═══{C.RESET}\n")
-
-    if not _connected:
-        print(f"  {C.RED}✗ Not connected to MQTT!{C.RESET}")
-        return
-
-    # Show available workers
-    if _workers:
-        print(f"  {C.DIM}Available workers:{C.RESET}")
-        for wid, info in _workers.items():
-            status = info.get("status", "unknown")
-            print(f"    • {wid} ({status})")
-        print()
-
-    worker_id = input(f"  {C.YELLOW}▸ Worker ID: {C.RESET}").strip()
-    if not worker_id:
-        print(f"  {C.RED}✗ Worker ID cannot be empty{C.RESET}")
-        return
-
-    message_text = input(f"  {C.YELLOW}▸ Message: {C.RESET}").strip()
-    if not message_text:
-        print(f"  {C.RED}✗ Message cannot be empty{C.RESET}")
-        return
-
-    payload = json.dumps({
-        "sender": "orchestrator",
-        "content": message_text,
-        "message_id": str(uuid.uuid4()),
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-    })
-
-    topic = f"task/{worker_id}/message"
-    client = _get_client()
-    result = client.publish(topic, payload, qos=1)
-    if result.rc == mqtt.MQTT_ERR_SUCCESS:
-        print(f"  {C.GREEN}✓ Message sent → {topic}{C.RESET}")
-        _write_log("sent_message", worker_id, {"content": message_text})
+        print(f"  {C.DIM}({min(15, len(logs))}/{len(logs)} events){C.RESET}")
     else:
-        print(f"  {C.RED}✗ Send failed{C.RESET}")
+        print(f"  {C.DIM}No in-memory events yet.{C.RESET}")
+
+    # 2. Log file (persisted)
+    print()
+    if os.path.exists(LOG_FILE):
+        print(f"  {C.BOLD}▸ Log File ({LOG_FILE}){C.RESET}")
+        try:
+            with open(LOG_FILE, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+
+            if lines:
+                for line in lines[-10:]:
+                    try:
+                        entry = json.loads(line.strip())
+                        ts = entry.get("timestamp", "")
+                        etype = entry.get("event_type", "")
+                        wid = entry.get("worker_id", "")
+                        content = entry.get("content", entry.get("status", ""))
+                        print(f"  {C.DIM}{ts}{C.RESET}  {etype:<15} {wid:<20} {content}")
+                    except Exception:
+                        print(f"  {line.strip()}")
+                print(f"  {C.DIM}(last 10/{len(lines)} entries — full log: {LOG_FILE}){C.RESET}")
+            else:
+                print(f"  {C.DIM}Log file is empty.{C.RESET}")
+        except Exception as exc:
+            print(f"  {C.RED}Error reading log: {exc}{C.RESET}")
+    else:
+        print(f"  {C.DIM}No log file yet.{C.RESET}")
 
 
-# ── [4] Statistics ───────────────────────────────────────────
+# ── [3] Statistics ───────────────────────────────────────────
 def show_stats():
     print(f"\n  {C.CYAN}{C.BOLD}═══ STATISTICS ═══{C.RESET}\n")
     print(f"  Total messages received : {C.BOLD}{_stats['messages_received']}{C.RESET}")
@@ -370,41 +353,6 @@ def show_stats():
     print(f"  LWT events             : {C.RED}{_stats['lwt_events']}{C.RESET}")
     print(f"  Workers tracked        : {len(_workers)}")
     print()
-
-
-# ── [5] View Log File ───────────────────────────────────────
-def view_log_file():
-    print(f"\n  {C.CYAN}{C.BOLD}═══ LOG FILE ({LOG_FILE}) ═══{C.RESET}\n")
-
-    if not os.path.exists(LOG_FILE):
-        print(f"  {C.DIM}Log file not found yet.{C.RESET}")
-        return
-
-    try:
-        with open(LOG_FILE, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-
-        if not lines:
-            print(f"  {C.DIM}Log file is empty.{C.RESET}")
-            return
-
-        # Show last 20 lines
-        for line in lines[-20:]:
-            try:
-                entry = json.loads(line.strip())
-                ts = entry.get("timestamp", "")
-                etype = entry.get("event_type", "")
-                wid = entry.get("worker_id", "")
-                content = entry.get("content", entry.get("status", ""))
-                print(f"  {C.DIM}{ts}{C.RESET}  {etype:<15} {wid:<20} {content}")
-            except Exception:
-                print(f"  {line.strip()}")
-
-        print(f"\n  {C.DIM}Showing last {min(20, len(lines))}/{len(lines)} entries{C.RESET}")
-        print(f"  {C.DIM}Full log: {LOG_FILE}{C.RESET}")
-
-    except Exception as exc:
-        print(f"  {C.RED}Error reading log: {exc}{C.RESET}")
 
 
 # ── [6] Configuration ───────────────────────────────────────
@@ -712,20 +660,18 @@ def run_cli():
     actions = {
         "1": show_workers,
         "2": show_event_log,
-        "3": send_message_to_worker,
-        "4": show_stats,
-        "5": view_log_file,
-        "6": show_config,
-        "7": reconnect,
-        "8": lambda: (clear_screen(), print_banner()),
-        "9": show_minio_models,
-        "10": deploy_model_to_worker,
+        "3": show_stats,
+        "4": show_config,
+        "5": reconnect,
+        "6": lambda: (clear_screen(), print_banner()),
+        "7": show_minio_models,
+        "8": deploy_model_to_worker,
     }
 
     while True:
         print_menu()
         try:
-            choice = input(f"\n  {C.YELLOW}{C.BOLD}▸ Select [0-10]: {C.RESET}").strip()
+            choice = input(f"\n  {C.YELLOW}{C.BOLD}▸ Select [0-8]: {C.RESET}").strip()
         except (KeyboardInterrupt, EOFError):
             choice = "0"
 

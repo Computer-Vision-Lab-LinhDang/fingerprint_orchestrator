@@ -78,7 +78,43 @@ async def get_user(user_id: str):
 @router.delete("/users/{user_id}")
 async def delete_user(user_id: str):
     db = get_database()
+    storage = get_storage_repo()
+
     async with db.acquire() as conn:
+        # Get username for MinIO prefix scan
+        user_row = await conn.fetchrow(
+            "SELECT username FROM users WHERE user_id = $1", user_id
+        )
+
+        # 1. Delete tracked images (image_path in DB)
+        rows = await conn.fetch(
+            "SELECT image_path FROM fingerprints WHERE user_id = $1 AND image_path != ''",
+            user_id,
+        )
+        deleted_paths = set()
+        for row in rows:
+            try:
+                storage._client.remove_object(settings.MINIO_BUCKET_IMAGES, row["image_path"])
+                deleted_paths.add(row["image_path"])
+                logger.info("Deleted image from MinIO: %s", row["image_path"])
+            except Exception as exc:
+                logger.warning("Failed to delete image %s: %s", row["image_path"], exc)
+
+        # 2. Scan MinIO for any remaining images with username prefix (legacy/untracked)
+        if user_row:
+            username = user_row["username"]
+            try:
+                objects = storage._client.list_objects(
+                    settings.MINIO_BUCKET_IMAGES, prefix=f"{username}_", recursive=True
+                )
+                for obj in objects:
+                    if obj.object_name not in deleted_paths:
+                        storage._client.remove_object(settings.MINIO_BUCKET_IMAGES, obj.object_name)
+                        logger.info("Deleted untracked image from MinIO: %s", obj.object_name)
+            except Exception as exc:
+                logger.warning("Failed to scan MinIO for user images: %s", exc)
+
+        # Delete user (fingerprints CASCADE deleted)
         result = await conn.execute(
             "DELETE FROM users WHERE user_id = $1", user_id
         )
@@ -116,12 +152,27 @@ async def list_fingerprints(
 @router.delete("/fingerprints/{fingerprint_id}")
 async def delete_fingerprint(fingerprint_id: str):
     db = get_database()
+    storage = get_storage_repo()
     async with db.acquire() as conn:
-        result = await conn.execute(
+        # Get image path before deleting
+        row = await conn.fetchrow(
+            "SELECT image_path FROM fingerprints WHERE fingerprint_id = $1", fingerprint_id
+        )
+        if not row:
+            raise HTTPException(404, "Fingerprint not found")
+
+        # Delete image from MinIO
+        if row["image_path"]:
+            try:
+                storage._client.remove_object(settings.MINIO_BUCKET_IMAGES, row["image_path"])
+                logger.info("Deleted image from MinIO: %s", row["image_path"])
+            except Exception as exc:
+                logger.warning("Failed to delete image %s: %s", row["image_path"], exc)
+
+        # Delete fingerprint record
+        await conn.execute(
             "DELETE FROM fingerprints WHERE fingerprint_id = $1", fingerprint_id
         )
-    if result == "DELETE 0":
-        raise HTTPException(404, "Fingerprint not found")
     return {"status": "deleted", "fingerprint_id": fingerprint_id}
 
 
