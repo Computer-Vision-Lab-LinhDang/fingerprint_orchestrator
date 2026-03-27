@@ -30,31 +30,32 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     logger.info("🚀 Starting %s ...", settings.APP_NAME)
 
-    # TODO: Initialize MinIO buckets
-    # from app.repositories.storage_repo import get_storage_repo
-    # try:
-    #     storage = get_storage_repo()
-    #     storage.ensure_buckets()
-    #     logger.info("✅ MinIO ready")
-    # except Exception as exc:
-    #     logger.error("❌ MinIO error: %s", exc)
+    # ── Initialize MinIO buckets ──────────────────────────────
+    from app.repositories.storage_repo import get_storage_repo
+    try:
+        storage = get_storage_repo()
+        storage.ensure_buckets()
+        logger.info("✅ MinIO ready")
+    except Exception as exc:
+        logger.error("❌ MinIO error: %s", exc)
 
-    # TODO: Connect to Database (PostgreSQL + pgvector)
-    # from app.db.database import get_database
-    # db = get_database()
-    # try:
-    #     await db.connect()
-    #     await db.init_schema()
-    #     logger.info("✅ Database ready")
-    # except Exception as exc:
-    #     logger.error("❌ Database error: %s", exc)
+    # ── Connect to Database (PostgreSQL + pgvector) ──────────
+    from app.db.database import get_database
+    db = get_database()
+    try:
+        await db.connect()
+        logger.info("✅ Database ready")
+    except Exception as exc:
+        logger.error("❌ Database error: %s", exc)
 
     # ── Start MQTT listener (background task) ────────────────
     broker = get_mqtt_broker()
     broker.add_subscription("worker/+/heartbeat", qos=1)
     broker.add_subscription("worker/+/status", qos=1)
     broker.add_subscription("worker/+/message", qos=1)
+    broker.add_subscription("worker/+/model/status", qos=1)
     broker.add_subscription("result/+", qos=1)
+    broker.add_subscription("edge/+/register", qos=1)
     broker.set_message_handler(on_message)
 
     mqtt_task = asyncio.create_task(_run_mqtt(app, broker))
@@ -69,7 +70,7 @@ async def lifespan(app: FastAPI):
         await mqtt_task
     except asyncio.CancelledError:
         pass
-    # TODO: await db.disconnect()
+    # await db.disconnect()
     logger.info("👋 Shutdown complete.")
 
 
@@ -78,6 +79,7 @@ async def _run_mqtt(app: FastAPI, broker):
         try:
             async with broker.create_client() as client:
                 app.state.mqtt_client = client
+                broker._client = client  # Store for registration service
                 await broker.subscribe_all(client)
                 logger.info("MQTT connected and subscribed successfully.")
                 await broker.process_messages(client)

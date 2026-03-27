@@ -65,6 +65,9 @@ async def on_message(message: aiomqtt.Message) -> None:
         elif len(parts) >= 2 and parts[0] == "result":
             await _handle_task_result(parts[1], message)
 
+        elif len(parts) >= 3 and parts[0] == "edge" and parts[2] == "register":
+            await _handle_edge_register(parts[1], message)
+
         else:
             logger.warning("Unknown topic: %s", topic)
 
@@ -146,11 +149,43 @@ async def _handle_task_result(task_id: str, message: aiomqtt.Message) -> None:
             task_id, result.worker_id, result.status.value,
         )
 
+        # Mark worker as idle
         service = get_worker_service()
         service.update_heartbeat(
             worker_id=result.worker_id,
             status=WorkerStatus.IDLE,
         )
+
+        # Check if this is a registration task — save to DB
+        from app.services.registration_service import handle_embed_result
+        try:
+            reg_result = await handle_embed_result(task_id, data)
+            if reg_result:
+                logger.info(
+                    "Registration result for task '%s': %s",
+                    task_id, reg_result.get("status"),
+                )
+                # Send result back to edge device
+                edge_id = reg_result.get("edge_id")
+                edge_task_id = reg_result.get("edge_task_id")
+                if edge_id and edge_task_id:
+                    from app.mqtt.broker import get_mqtt_broker
+                    broker = get_mqtt_broker()
+                    if broker.client:
+                        # Use edge's original task_id so it can match
+                        reg_result["task_id"] = edge_task_id
+                        result_topic = "edge/{}/result/{}".format(edge_id, edge_task_id)
+                        await broker.publish(
+                            broker.client,
+                            result_topic,
+                            json.dumps(reg_result),
+                        )
+                        logger.info("Sent result to edge '%s'", edge_id)
+        except Exception as reg_exc:
+            logger.error(
+                "Failed to process registration for task '%s': %s",
+                task_id, reg_exc,
+            )
 
         _write_log("task_result", result.worker_id, {
             "task_id": task_id,
@@ -190,3 +225,69 @@ async def _handle_model_status(worker_id: str, message: aiomqtt.Message) -> None
 
     except Exception as exc:
         logger.error("Error processing model status from '%s': %s", worker_id, exc)
+
+
+# ── Edge Device Registration ────────────────────────────────
+async def _handle_edge_register(edge_id: str, message: aiomqtt.Message) -> None:
+    """Handle registration request from edge device."""
+    try:
+        data = json.loads(message.payload.decode())
+        task_id = data.get("task_id", "")
+        username = data.get("username", "")
+        fullname = data.get("fullname", "")
+        finger_type = data.get("finger_type", "right_thumb")
+        image_base64 = data.get("image_base64", "")
+        image_filename = data.get("image_filename", "")
+
+        logger.info(
+            "📥 Registration from edge '%s': user=%s, name=%s",
+            edge_id, username, fullname,
+        )
+
+        if not username or not fullname or not image_base64:
+            logger.error("Missing required fields in registration request")
+            return
+
+        _write_log("edge_register", edge_id, {
+            "task_id": task_id,
+            "username": username,
+            "fullname": fullname,
+            "finger_type": finger_type,
+        })
+
+        # Call registration service
+        from app.services.registration_service import register_fingerprint
+        from app.mqtt.broker import get_mqtt_broker
+
+        broker = get_mqtt_broker()
+        mqtt_client = broker.client
+
+        if not mqtt_client:
+            logger.error("MQTT client not available for registration")
+            return
+
+        result = await register_fingerprint(
+            client=mqtt_client,
+            username=username,
+            fullname=fullname,
+            image_base64=image_base64,
+            finger_type=finger_type,
+            image_filename=image_filename,
+        )
+
+        # Store edge_id and original task_id so we can send result back later
+        from app.services.registration_service import get_pending_registrations
+        pending = get_pending_registrations()
+        if result.get("task_id") in pending:
+            pending[result["task_id"]]["edge_id"] = edge_id
+            pending[result["task_id"]]["edge_task_id"] = task_id  # original edge task_id
+
+        logger.info(
+            "Registration dispatched: task=%s, worker=%s",
+            result.get("task_id"), result.get("worker_id"),
+        )
+
+    except Exception as exc:
+        logger.error("Error processing registration from edge '%s': %s", edge_id, exc)
+        import traceback
+        traceback.print_exc()
