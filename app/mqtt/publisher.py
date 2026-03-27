@@ -1,5 +1,3 @@
-# TODO: MQTT Publisher — enable when task dispatch is ready
-
 from __future__ import annotations
 
 import logging
@@ -20,44 +18,19 @@ class MQTTPublisher:
     def _build_topic(self, worker_id: str, task_type: TaskType) -> str:
         return f"task/{worker_id}/{task_type.value}"
 
-    # ── Send Embed task ──────────────────────────────────────
-    async def send_embed_task(
-        self,
-        client: aiomqtt.Client,
-        worker_id: str,
-        payload: TaskPayload,
-    ) -> str:
-        """Send embedding task to a specific worker. Returns task_id."""
+    async def send_embed_task(self, client: aiomqtt.Client, worker_id: str, payload: TaskPayload) -> str:
         topic = self._build_topic(worker_id, TaskType.EMBED)
-        message = payload.model_dump_json()
-
-        await client.publish(topic, payload=message, qos=1)
-        logger.info(
-            "Sent embed task '%s' to worker '%s' on topic '%s'",
-            payload.task_id, worker_id, topic,
-        )
+        await client.publish(topic, payload=payload.model_dump_json(), qos=1)
+        logger.info("Sent embed task '%s' → worker '%s'", payload.task_id, worker_id)
         return payload.task_id
 
-    # ── Send Match task ──────────────────────────────────────
-    async def send_match_task(
-        self,
-        client: aiomqtt.Client,
-        worker_id: str,
-        payload: MatchPayload,
-    ) -> str:
-        """Send matching task to a specific worker. Returns task_id."""
+    async def send_match_task(self, client: aiomqtt.Client, worker_id: str, payload: MatchPayload) -> str:
         topic = self._build_topic(worker_id, TaskType.MATCH)
-        message = payload.model_dump_json()
-
-        await client.publish(topic, payload=message, qos=1)
-        logger.info(
-            "Sent match task '%s' to worker '%s' on topic '%s'",
-            payload.task_id, worker_id, topic,
-        )
+        await client.publish(topic, payload=payload.model_dump_json(), qos=1)
+        logger.info("Sent match task '%s' → worker '%s'", payload.task_id, worker_id)
         return payload.task_id
 
 
-# ── Singleton ────────────────────────────────────────────────
 _publisher: Optional[MQTTPublisher] = None
 
 

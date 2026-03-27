@@ -116,13 +116,13 @@ app.state.mqtt_client = None
 app.include_router(health_router)
 
 from app.routes.api import router as api_router
+from app.routes.users import router as users_router
+from app.routes.fingerprints import router as fingerprints_router
+from app.routes.models import router as models_router
 app.include_router(api_router)
-
-# TODO: Include API routers when ready
-# from app.routes.register import router as register_router
-# from app.routes.verify import router as verify_router
-# app.include_router(register_router, prefix="/api/v1")
-# app.include_router(verify_router, prefix="/api/v1")
+app.include_router(users_router)
+app.include_router(fingerprints_router)
+app.include_router(models_router)
 
 
 # ── Run ──────────────────────────────────────────────────────

@@ -1,5 +1,3 @@
-# TODO: Fingerprint repository — enable when PostgreSQL + pgvector is ready
-
 from __future__ import annotations
 
 import logging
@@ -97,6 +95,34 @@ class FingerprintRepository:
                 fingerprint_id,
             )
             return result == "DELETE 1"
+
+    async def list_by_user(self, user_id: str = None) -> list[dict[str, Any]]:
+        async with self._db.acquire() as conn:
+            if user_id:
+                rows = await conn.fetch(
+                    """SELECT f.*, u.name as user_name
+                       FROM fingerprints f
+                       JOIN users u ON u.user_id = f.user_id
+                       WHERE f.user_id = $1
+                       ORDER BY f.created_at DESC""",
+                    user_id,
+                )
+            else:
+                rows = await conn.fetch(
+                    """SELECT f.*, u.name as user_name
+                       FROM fingerprints f
+                       JOIN users u ON u.user_id = f.user_id
+                       ORDER BY f.created_at DESC"""
+                )
+        return [dict(r) for r in rows]
+
+    async def get_image_paths_by_user(self, user_id: str) -> list[str]:
+        async with self._db.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT image_path FROM fingerprints WHERE user_id = $1 AND image_path != ''",
+                user_id,
+            )
+        return [row["image_path"] for row in rows]
 
 
 # ── Singleton ────────────────────────────────────────────────
