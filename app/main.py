@@ -57,6 +57,7 @@ async def lifespan(app: FastAPI):
     broker.add_subscription("worker/+/model/status", qos=1)
     broker.add_subscription("result/+", qos=1)
     broker.add_subscription("edge/+/register", qos=1)
+    broker.add_subscription("edge/+/verify", qos=1)
     broker.set_message_handler(on_message)
 
     mqtt_task = asyncio.create_task(_run_mqtt(app, broker))

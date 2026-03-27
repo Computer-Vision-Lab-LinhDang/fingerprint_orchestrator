@@ -51,6 +51,8 @@ async def on_message(message: aiomqtt.Message) -> None:
             await _handle_task_result(parts[1], message)
         elif len(parts) >= 3 and parts[0] == "edge" and parts[2] == "register":
             await _handle_edge_register(parts[1], message)
+        elif len(parts) >= 3 and parts[0] == "edge" and parts[2] == "verify":
+            await _handle_edge_verify(parts[1], message)
         else:
             logger.warning("Unknown topic: %s", topic)
     except Exception as exc:
@@ -216,3 +218,48 @@ async def _handle_edge_register(edge_id: str, message: aiomqtt.Message) -> None:
         logger.error("Error processing registration from edge '%s': %s", edge_id, exc)
         import traceback
         traceback.print_exc()
+
+
+async def _handle_edge_verify(edge_id: str, message: aiomqtt.Message) -> None:
+    """Handle verification request from edge device."""
+    try:
+        data = json.loads(message.payload.decode())
+        task_id = data.get("task_id", "")
+        image_base64 = data.get("image_base64", "")
+        image_filename = data.get("image_filename", "")
+
+        logger.info("📥 Verify request from edge '%s': task=%s", edge_id, task_id)
+
+        if not image_base64:
+            logger.error("Missing image_base64 in verify request")
+            return
+
+        _write_log("edge_verify", edge_id, {"task_id": task_id})
+
+        # TODO: Call verification service
+        # from app.services.verification_service import start_verification
+        # from app.mqtt.broker import get_mqtt_broker
+        # broker = get_mqtt_broker()
+        # mqtt_client = broker.client
+        # if not mqtt_client:
+        #     logger.error("MQTT client not available for verification")
+        #     return
+        # result = await start_verification(
+        #     client=mqtt_client,
+        #     task_id=task_id,
+        #     image_base64=image_base64,
+        #     image_filename=image_filename,
+        #     edge_id=edge_id,
+        # )
+
+        # TODO: Track edge_id so final result can be sent back
+        # from app.services.verification_service import get_pending_verifications
+        # pending = get_pending_verifications()
+        # if task_id in pending:
+        #     pending[task_id]["edge_id"] = edge_id
+        #     pending[task_id]["edge_task_id"] = task_id
+
+        logger.info("[VERIFY] TODO: _handle_edge_verify not implemented yet")
+
+    except Exception as exc:
+        logger.error("Error processing verify from edge '%s': %s", edge_id, exc)
