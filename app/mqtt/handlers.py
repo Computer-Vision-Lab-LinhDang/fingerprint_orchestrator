@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import uuid
 from datetime import datetime
 from typing import Optional
 
@@ -45,6 +46,8 @@ async def on_message(message: aiomqtt.Message) -> None:
             await _handle_lwt(parts[1], message)
         elif len(parts) >= 3 and parts[0] == "worker" and parts[2] == "message":
             await _handle_worker_message(parts[1], message)
+        elif len(parts) >= 3 and parts[0] == "worker" and parts[2] == "enrolled":
+            await _handle_worker_enrolled(parts[1], message)
         elif len(parts) >= 4 and parts[0] == "worker" and parts[2] == "model" and parts[3] == "status":
             await _handle_model_status(parts[1], message)
         elif len(parts) >= 2 and parts[0] == "result":
@@ -168,6 +171,129 @@ async def _handle_model_status(worker_id: str, message: aiomqtt.Message) -> None
         })
     except Exception as exc:
         logger.error("Error processing model status from '%s': %s", worker_id, exc)
+
+
+async def _handle_worker_enrolled(worker_id: str, message: aiomqtt.Message) -> None:
+    """Persist worker-side enrollment event into orchestrator Postgres + MinIO."""
+    try:
+        data = json.loads(message.payload.decode())
+        user = data.get("user", {})
+        fp = data.get("fingerprint", {})
+        model = data.get("model", {})
+
+        username = (user.get("employee_id") or "").strip()
+        fullname = (user.get("full_name") or "").strip()
+        finger_index = int(fp.get("finger_index", 0))
+        vector = fp.get("embedding") or []
+        quality_score = float(fp.get("quality_score", 0) or 0)
+        image_b64 = fp.get("image_base64") or ""
+        image_width = int(fp.get("image_width", 192) or 192)
+        image_height = int(fp.get("image_height", 192) or 192)
+
+        if not username or not vector:
+            logger.warning("Skip worker enrollment: missing employee_id or embedding")
+            return
+
+        from app.repositories.user_repo import get_user_repo
+        from app.repositories.fingerprint_repo import get_fingerprint_repo
+        from app.repositories.storage_repo import get_storage_repo
+
+        user_repo = get_user_repo()
+        fp_repo = get_fingerprint_repo()
+        storage = get_storage_repo()
+
+        existing_user = await user_repo.find_by_username(username)
+        if existing_user:
+            user_id = existing_user["user_id"]
+        else:
+            user_id = str(uuid.uuid4())
+            await user_repo.create(user_id, username, fullname or username)
+
+        image_path = ""
+        if image_b64:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            image_name = f"{username}_f{finger_index}_{ts}.png"
+
+            upload_b64 = image_b64
+            content_type = "image/png"
+
+            try:
+                import base64 as _b64
+                raw = _b64.b64decode(image_b64)
+                is_container = (
+                    raw.startswith(b"\x89PNG\r\n\x1a\n")
+                    or raw.startswith(b"\xff\xd8\xff")
+                    or raw.startswith(b"II*\x00")
+                    or raw.startswith(b"MM\x00*")
+                )
+
+                # Sensor often sends raw grayscale bytes (W*H). Convert to PNG.
+                if not is_container and len(raw) == image_width * image_height:
+                    from io import BytesIO
+                    from PIL import Image
+
+                    img = Image.frombytes("L", (image_width, image_height), raw)
+                    buf = BytesIO()
+                    img.save(buf, format="PNG")
+                    upload_b64 = _b64.b64encode(buf.getvalue()).decode("ascii")
+                    content_type = "image/png"
+            except Exception:
+                # Keep original payload if conversion fails.
+                pass
+
+            storage.upload_image(
+                filename=image_name,
+                image_base64=upload_b64,
+                content_type=content_type,
+            )
+            image_path = image_name
+
+        # Map local finger index 0..9 -> string labels used by orchestrator.
+        finger_map = {
+            0: "right_thumb",
+            1: "right_index",
+            2: "right_middle",
+            3: "right_ring",
+            4: "right_little",
+            5: "left_thumb",
+            6: "left_index",
+            7: "left_middle",
+            8: "left_ring",
+            9: "left_little",
+        }
+        finger_type = finger_map.get(finger_index, "right_index")
+
+        fp_id_raw = fp.get("fp_id")
+        if fp_id_raw is not None:
+            fingerprint_id = f"{worker_id}-{fp_id_raw}"
+        else:
+            fingerprint_id = "fp_" + str(uuid.uuid4())[:8]
+
+        model_name = model.get("name") or "worker-sync"
+        await fp_repo.save(
+            fingerprint_id=fingerprint_id,
+            user_id=user_id,
+            finger_id=finger_type,
+            embedding=vector,
+            model_name=model_name,
+            image_path=image_path,
+            quality_score=quality_score,
+        )
+
+        _write_log("worker_enrolled", worker_id, {
+            "username": username,
+            "fingerprint_id": fingerprint_id,
+            "finger_type": finger_type,
+            "vector_dim": len(vector),
+            "quality_score": quality_score,
+            "image_path": image_path,
+        })
+        logger.info(
+            "Synced worker enrollment: worker=%s user=%s fp=%s",
+            worker_id, username, fingerprint_id,
+        )
+    except Exception as exc:
+        logger.error("Error processing worker enrollment from '%s': %s", worker_id, exc)
 
 
 async def _handle_edge_register(edge_id: str, message: aiomqtt.Message) -> None:

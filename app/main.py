@@ -54,6 +54,7 @@ async def lifespan(app: FastAPI):
     broker.add_subscription("worker/+/heartbeat", qos=1)
     broker.add_subscription("worker/+/status", qos=1)
     broker.add_subscription("worker/+/message", qos=1)
+    broker.add_subscription("worker/+/enrolled", qos=1)
     broker.add_subscription("worker/+/model/status", qos=1)
     broker.add_subscription("result/+", qos=1)
     broker.add_subscription("edge/+/register", qos=1)

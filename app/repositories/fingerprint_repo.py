@@ -23,20 +23,48 @@ class FingerprintRepository:
         embedding: list[float],
         model_name: str = "default",
         image_path: str = "",
+        quality_score: float = 0.0,
         metadata: Optional[dict[str, Any]] = None,
     ) -> str:
         try:
             async with self._db.acquire() as conn:
-                vector_str = "[" + ",".join(str(v) for v in embedding) + "]"
+                # Adapt vector size to the actual pgvector dimension in DB.
+                target_dim = await conn.fetchval(
+                    """
+                    SELECT COALESCE(
+                        (regexp_match(format_type(a.atttypid, a.atttypmod), 'vector\\((\\d+)\\)'))[1]::int,
+                        $1
+                    )
+                    FROM pg_attribute a
+                    JOIN pg_class c ON c.oid = a.attrelid
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE c.relname = 'fingerprints'
+                      AND a.attname = 'embedding'
+                      AND n.nspname = current_schema()
+                    LIMIT 1
+                    """,
+                    len(embedding),
+                )
+                if not isinstance(target_dim, int) or target_dim <= 0:
+                    target_dim = len(embedding)
+
+                vector = list(embedding)
+                if len(vector) > target_dim:
+                    vector = vector[:target_dim]
+                elif len(vector) < target_dim:
+                    vector = vector + [0.0] * (target_dim - len(vector))
+
+                vector_str = "[" + ",".join(str(v) for v in vector) + "]"
                 await conn.execute(
                     """
                     INSERT INTO fingerprints
-                        (fingerprint_id, user_id, finger_type, embedding, model_version, image_path)
-                    VALUES ($1, $2, $3, $4::vector, $5, $6)
+                        (fingerprint_id, user_id, finger_type, embedding, model_version, image_path, quality_score)
+                    VALUES ($1, $2, $3, $4::vector, $5, $6, $7)
                     ON CONFLICT (fingerprint_id) DO UPDATE SET
                         embedding      = EXCLUDED.embedding,
                         model_version  = EXCLUDED.model_version,
-                        image_path     = EXCLUDED.image_path
+                        image_path     = EXCLUDED.image_path,
+                        quality_score  = EXCLUDED.quality_score
                     """,
                     fingerprint_id,
                     user_id,
@@ -44,6 +72,7 @@ class FingerprintRepository:
                     vector_str,
                     model_name,
                     image_path,
+                    quality_score,
                 )
                 logger.info("Saved fingerprint: %s (user=%s)", fingerprint_id, user_id)
                 return fingerprint_id
