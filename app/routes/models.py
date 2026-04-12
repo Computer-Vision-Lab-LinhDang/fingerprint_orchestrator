@@ -16,6 +16,29 @@ from app.services.worker_service import get_worker_service
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["Models"])
 settings = get_settings()
+SUPPORTED_MODEL_TYPES = {"embedding", "matching", "pad"}
+
+
+def _extract_model_payload_fields(model_type: str, s3_path: str) -> tuple[str, str, str]:
+    prefix = f"{model_type}/"
+    if not s3_path.startswith(prefix):
+        raise HTTPException(
+            400,
+            f"s3_path must be under '{prefix}' for model_type '{model_type}'",
+        )
+
+    relative_path = s3_path[len(prefix):].strip("/")
+    if not relative_path:
+        raise HTTPException(400, "s3_path must point to a model file")
+
+    relative_obj = relative_path.split("/")
+    if len(relative_obj) >= 2:
+        model_name = relative_obj[0]
+    else:
+        model_name = relative_obj[-1].rsplit(".", 1)[0]
+
+    version = model_name.split("_")[-1] if "_" in model_name else "latest"
+    return model_name, version, relative_path
 
 
 @router.get("/models")
@@ -83,6 +106,8 @@ async def deploy_model(body: dict):
 
     if not worker_id or not s3_path:
         raise HTTPException(400, "worker_id and s3_path required")
+    if model_type not in SUPPORTED_MODEL_TYPES:
+        raise HTTPException(400, f"model_type must be one of {sorted(SUPPORTED_MODEL_TYPES)}")
 
     worker_svc = get_worker_service()
     if worker_id not in worker_svc.workers:
@@ -105,7 +130,7 @@ async def deploy_model(body: dict):
             settings.MINIO_BUCKET_MODELS, s3_path, expires=timedelta(hours=2)
         )
 
-    model_name = s3_path.rsplit("/", 1)[-1] if "/" in s3_path else s3_path
+    model_name, version, relative_path = _extract_model_payload_fields(model_type, s3_path)
 
     client = mqtt_client.Client(client_id="dashboard-deploy", protocol=mqtt_client.MQTTv311)
     client.connect(settings.MQTT_BROKER_HOST, settings.MQTT_BROKER_PORT, 10)
@@ -113,9 +138,10 @@ async def deploy_model(body: dict):
     payload = json.dumps({
         "model_type": model_type,
         "model_name": model_name,
-        "version": "latest",
+        "version": version,
         "download_url": download_url,
         "s3_path": s3_path,
+        "relative_path": relative_path,
     })
 
     topic = f"task/{worker_id}/model/update"
@@ -124,6 +150,12 @@ async def deploy_model(body: dict):
 
     if result.rc == 0:
         logger.info("Deploy model '%s' to worker '%s'", s3_path, worker_id)
-        return {"status": "sent", "worker_id": worker_id, "model": model_name}
+        return {
+            "status": "sent",
+            "worker_id": worker_id,
+            "model_type": model_type,
+            "model": model_name,
+            "relative_path": relative_path,
+        }
     else:
         raise HTTPException(500, "Failed to send deploy command")

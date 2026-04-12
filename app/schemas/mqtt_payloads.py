@@ -49,6 +49,10 @@ class ModelUpdateCommand(BaseModel):
     version: str = Field(..., description="e.g. v1")
     download_url: str = Field(..., description="Presigned URL to download model")
     s3_path: str = Field(default="", description="Original S3 path")
+    relative_path: str = Field(
+        default="",
+        description="Path inside the model type folder, e.g. embedding_v1/model.onnx",
+    )
 
 
 class ModelStatusReport(BaseModel):

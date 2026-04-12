@@ -529,17 +529,18 @@ def deploy_model_to_worker():
             recursive=True,
         ))
         # Filter .keep and group by version folder
+        allowed_model_suffixes = (".onnx", ".engine", ".trt", ".pt", ".pth")
         model_files = [
             obj for obj in objects
             if not obj.object_name.endswith(".keep")
-            and obj.object_name.endswith(".onnx")
+            and obj.object_name.endswith(allowed_model_suffixes)
         ]
     except Exception as exc:
         print(f"  {C.RED}✗ Error listing models: {exc}{C.RESET}")
         return
 
     if not model_files:
-        print(f"  {C.RED}✗ No .onnx models found in {selected_type}/ on MinIO{C.RESET}")
+        print(f"  {C.RED}✗ No model files found in {selected_type}/ on MinIO{C.RESET}")
         print(f"  {C.DIM}Upload models via MinIO Console: http://{settings.MINIO_ENDPOINT.replace(':9000', ':9001')}{C.RESET}")
         return
 
@@ -562,10 +563,14 @@ def deploy_model_to_worker():
 
     selected_model = model_files[m_idx]
     s3_path = selected_model.object_name
-    path_parts = s3_path.split("/")
-    model_name = path_parts[1] if len(path_parts) >= 2 else s3_path
-    # Extract version: embedding_v1 → v1
-    version = model_name.split("_")[-1] if "_" in model_name else "unknown"
+    prefix = f"{selected_type}/"
+    if not s3_path.startswith(prefix):
+        print(f"  {C.RED}✗ Invalid model path: {s3_path}{C.RESET}")
+        return
+    relative_path = s3_path[len(prefix):].strip("/")
+    relative_parts = relative_path.split("/")
+    model_name = relative_parts[0] if len(relative_parts) >= 2 else relative_parts[-1].rsplit(".", 1)[0]
+    version = model_name.split("_")[-1] if "_" in model_name else "latest"
 
     # 4. Generate presigned URL (using public endpoint if configured)
     try:
@@ -600,6 +605,7 @@ def deploy_model_to_worker():
         "version": version,
         "download_url": download_url,
         "s3_path": s3_path,
+        "relative_path": relative_path,
     })
 
     topic = f"task/{target_worker_id}/model/update"
@@ -610,6 +616,7 @@ def deploy_model_to_worker():
         print(f"\n  {C.GREEN}✓ Deploy command sent!{C.RESET}")
         print(f"    Worker  : {target_worker_id}")
         print(f"    Model   : {selected_type}/{model_name}")
+        print(f"    Path    : {relative_path}")
         print(f"    Topic   : {topic}")
         print(f"  {C.DIM}Worker is downloading the model...{C.RESET}")
     else:
