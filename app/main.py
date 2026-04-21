@@ -129,9 +129,8 @@ app.include_router(models_router)
 
 
 # ── Run ──────────────────────────────────────────────────────
-if __name__ == "__main__":
-    cli_mode = "--cli" in sys.argv
-
+def main(cli_mode: bool = False) -> None:
+    """Console entrypoint for the FastAPI API server."""
     if cli_mode:
         from app.cli import run_cli
         run_cli()
@@ -146,3 +145,7 @@ if __name__ == "__main__":
             )
         except KeyboardInterrupt:
             print("\n👋 Bye!")
+
+
+if __name__ == "__main__":
+    main(cli_mode="--cli" in sys.argv)

@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fingerprint-orchestrator"
+version = "1.0.0"
+description = "Fingerprint orchestrator managing Jetson workers over MQTT"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "aiomqtt==2.3.0",
+  "asyncpg==0.30.0",
+  "fastapi==0.115.0",
+  "minio==7.2.9",
+  "pydantic==2.9.2",
+  "pydantic-settings==2.5.2",
+  "python-dotenv==1.0.1",
+  "python-multipart==0.0.12",
+  "uvicorn[standard]==0.30.6",
+]
+
+[project.scripts]
+fingerprint-orchestrator-api = "app.main:main"
+fingerprint-orchestrator-cli = "app.cli:run_cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.uv]
+package = true

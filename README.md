@@ -1,158 +1,136 @@
 # Fingerprint Orchestrator
 
-Central server that manages GPU workers via **MQTT** for fingerprint recognition tasks.
-Includes a **FastAPI web server** and an **interactive CLI** for monitoring.
+Central server that manages Jetson workers via MQTT, stores master data in PostgreSQL/pgvector, and serves the dashboard/API via FastAPI.
 
----
-
-## Prerequisites
+## Runtime dependencies
 
 - Python 3.10+
-- Mosquitto MQTT broker installed and running
+- `uv`
+- Mosquitto MQTT broker
+- PostgreSQL + pgvector
+- MinIO
 
-## Installation
+If you already have these containers running:
+
+```bash
+docker ps
+```
+
+and you see:
+
+- PostgreSQL/pgvector on `localhost:5433`
+- MinIO on `localhost:9000`
+
+then the remaining host dependency is usually just Mosquitto.
+
+## Installation with `uv sync`
 
 ```bash
 cd fingerprint_orchestrator
+cp .env.example .env
+./scripts/setup_orchestrator_env.sh
+```
 
-# Create virtual environment
-python3 -m venv venv
+If the script is not executable yet:
+
+```bash
+chmod +x scripts/setup_orchestrator_env.sh
+```
+
+For daily updates after `git pull`:
+
+```bash
+cd fingerprint_orchestrator
+RECREATE_VENV=0 ./scripts/setup_orchestrator_env.sh
+```
+
+This refreshes the installed package from the current source tree without recreating `venv`.
+
+## Manual `uv` workflow
+
+```bash
+cd fingerprint_orchestrator
+uv venv --python python3 venv
 source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
+uv sync --active --no-editable \
+  --refresh-package fingerprint-orchestrator \
+  --reinstall-package fingerprint-orchestrator
 ```
 
 ## Configuration
 
-```bash
-# Copy example env file
-cp .env.example .env
-```
-
-Edit `.env` with your values:
+Copy `.env.example` to `.env` and set the important values:
 
 ```env
-MQTT_BROKER_HOST=localhost         # IP of the Mosquitto broker
+MQTT_BROKER_HOST=localhost
 MQTT_BROKER_PORT=1883
-MQTT_USERNAME=                     # Leave empty if allow_anonymous
-MQTT_PASSWORD=                     # Leave empty if allow_anonymous
-MQTT_CLIENT_ID=orchestrator-main
-WORKER_HEARTBEAT_TIMEOUT=30        # Seconds before marking worker offline
+
+DB_HOST=localhost
+DB_PORT=5433
+DB_USER=fingerprint
+DB_PASSWORD=fingerprint123
+DB_NAME=fingerprint_db
+
+MINIO_ENDPOINT=localhost:9000
+MINIO_PUBLIC_ENDPOINT=100.100.108.30:9000
+MINIO_ACCESS_KEY=minioadmin
+MINIO_SECRET_KEY=minioadmin123
+MINIO_BUCKET_MODELS=fingerprint-models
+MINIO_BUCKET_IMAGES=fingerprint-images
+MINIO_SECURE=false
 ```
 
-| Variable                   | Description                                                             |
-| -------------------------- | ----------------------------------------------------------------------- |
-| `MQTT_BROKER_HOST`         | Mosquitto broker IP. Use `localhost` if broker runs on the same machine |
-| `MQTT_BROKER_PORT`         | Default MQTT port: `1883`                                               |
-| `MQTT_USERNAME`            | Leave empty if broker has `allow_anonymous true`                        |
-| `MQTT_PASSWORD`            | Leave empty if broker has `allow_anonymous true`                        |
-| `MQTT_CLIENT_ID`           | Unique client ID for the orchestrator                                   |
-| `WORKER_HEARTBEAT_TIMEOUT` | Seconds without heartbeat before a worker is marked offline             |
+Use `MINIO_PUBLIC_ENDPOINT` as the address Jetson workers can reach, for example your Tailscale/LAN IP.
 
-## Mosquitto Broker Setup
+## Run
 
-```bash
-# Install Mosquitto
-sudo apt install mosquitto mosquitto-clients
-
-# Allow external connections (for Jetson Nano workers)
-echo 'listener 1883 0.0.0.0
-allow_anonymous true' | sudo tee /etc/mosquitto/conf.d/external.conf
-
-# Restart broker
-sudo systemctl restart mosquitto
-
-# Verify it's running
-sudo systemctl status mosquitto
-```
-
-## Running
-
-### Option 1: CLI Dashboard (recommended for development)
+API server:
 
 ```bash
 source venv/bin/activate
+fingerprint-orchestrator-api
+```
+
+CLI:
+
+```bash
+source venv/bin/activate
+fingerprint-orchestrator-cli
+```
+
+You can still run the old entrypoints if needed:
+
+```bash
+python -m app.main
 python -m app.cli
 ```
 
-### Option 2: FastAPI Web Server
+## MQTT topics used by orchestrator
 
-```bash
-source venv/bin/activate
-python -m app.main
-```
+Subscribe:
 
-Then visit `http://localhost:8000/health` or `http://localhost:8000/workers`.
+- `worker/+/heartbeat`
+- `worker/+/status`
+- `worker/+/message`
+- `worker/+/enrolled`
+- `worker/+/enrollment/upload/status`
+- `worker/+/model/status`
+- `result/+`
+- `edge/+/register`
+- `edge/+/verify`
 
-## CLI Menu
+Publish:
 
-```
-╔══════════════════════════════════════════════════╗
-║     🎛️  FINGERPRINT ORCHESTRATOR — CLI           ║
-╚══════════════════════════════════════════════════╝
+- `task/{worker_id}/embed`
+- `task/{worker_id}/match`
+- `task/{worker_id}/message`
+- `task/{worker_id}/model/update`
+- `task/{worker_id}/sync`
+- `task/{worker_id}/sync/check`
+- `task/{worker_id}/enrollment/upload`
 
-  Orchestrator  │  ● CONNECTED  │  Workers online: 1
+## Notes
 
-  [1]  🖥️   Connected Workers
-  [2]  📋  Recent Event Log
-  [3]  ✉️   Send Message to Worker
-  [4]  📈  Statistics
-  [5]  📄  View Log File
-  [6]  ⚙️   Current Configuration
-  [7]  🔄  Reconnect MQTT
-  [8]  🧹  Clear Screen
-  [0]  🚪  Exit
-```
-
-| Option                         | Description                                                                            |
-| ------------------------------ | -------------------------------------------------------------------------------------- |
-| **[1] Connected Workers**      | Shows all detected workers with status (idle/busy/offline), last seen time, and uptime |
-| **[2] Recent Event Log**       | Live event log: heartbeats, messages, task results, LWT events                         |
-| **[3] Send Message to Worker** | Send a text message to a specific worker by ID                                         |
-| **[4] Statistics**             | Total messages received, heartbeats, worker messages, task results, LWT events         |
-| **[5] View Log File**          | Read the last 20 entries from `logs/worker_events.log` (persistent JSON log)           |
-| **[6] Current Configuration**  | Display all current `.env` settings                                                    |
-| **[7] Reconnect MQTT**         | Disconnect and reconnect to the MQTT broker                                            |
-
-## MQTT Topics
-
-| Direction | Topic                      | Description                         |
-| --------- | -------------------------- | ----------------------------------- |
-| Subscribe | `worker/+/heartbeat`       | Worker heartbeat (every 10s)        |
-| Subscribe | `worker/+/status`          | Worker LWT (auto offline detection) |
-| Subscribe | `worker/+/message`         | Messages from workers               |
-| Subscribe | `result/+`                 | Task results from workers           |
-| Publish   | `task/{worker_id}/embed`   | Send embed task to worker           |
-| Publish   | `task/{worker_id}/match`   | Send match task to worker           |
-| Publish   | `task/{worker_id}/message` | Send message to worker              |
-
-## Log File
-
-All worker events are logged to `logs/worker_events.log` in JSON format:
-
-```json
-{"timestamp": "2026-03-13 16:10:05", "event_type": "heartbeat", "worker_id": "jetson-nano-01", "status": "idle"}
-{"timestamp": "2026-03-13 16:10:12", "event_type": "message", "worker_id": "jetson-nano-01", "content": "hello laptop"}
-```
-
-## Project Structure
-
-```
-fingerprint_orchestrator/
-├── app/
-│   ├── main.py              # FastAPI entry point + MQTT listener
-│   ├── cli.py               # Interactive CLI dashboard
-│   ├── core/config.py       # Settings from .env
-│   ├── schemas/             # Pydantic models
-│   ├── mqtt/
-│   │   ├── broker.py        # MQTT connection manager (aiomqtt)
-│   │   └── handlers.py      # Message handlers + file logger
-│   └── managers/
-│       └── worker_manager.py  # Worker status tracking
-├── logs/                    # Auto-created log directory
-├── .env
-├── .env.example
-├── requirements.txt
-└── README.md
-```
+- Worker enrollment images are now uploaded by the source worker through presigned MinIO PUT URLs.
+- When a worker reconnects, orchestrator asks it to flush pending offline registrations via `task/{worker_id}/sync/check`.
+- The dashboard/API schema initialization creates required PostgreSQL tables and the `vector` extension automatically at startup.
