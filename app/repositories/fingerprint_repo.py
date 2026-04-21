@@ -117,6 +117,19 @@ class FingerprintRepository:
             )
             return dict(row) if row else None
 
+    async def update_image_path(self, fingerprint_id: str, image_path: str) -> bool:
+        async with self._db.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE fingerprints
+                SET image_path = $2
+                WHERE fingerprint_id = $1
+                """,
+                fingerprint_id,
+                image_path,
+            )
+        return result != "UPDATE 0"
+
     async def delete(self, fingerprint_id: str) -> bool:
         async with self._db.acquire() as conn:
             result = await conn.execute(

@@ -30,6 +30,7 @@ class StorageRepository:
         )
         self._bucket_images = settings.MINIO_BUCKET_IMAGES
         self._bucket_models = settings.MINIO_BUCKET_MODELS
+        self._public_endpoint = settings.MINIO_PUBLIC_ENDPOINT
 
     # ── Initialize buckets ───────────────────────────────────
     def ensure_buckets(self) -> None:
@@ -68,6 +69,16 @@ class StorageRepository:
         except Exception as exc:
             raise StorageError(f"Image upload failed: {exc}") from exc
 
+    def _get_presign_client(self) -> Minio:
+        if self._public_endpoint:
+            return Minio(
+                endpoint=self._public_endpoint,
+                access_key=get_settings().MINIO_ACCESS_KEY,
+                secret_key=get_settings().MINIO_SECRET_KEY,
+                secure=get_settings().MINIO_SECURE,
+            )
+        return self._client
+
     # ── Presigned URL ────────────────────────────────────────
     def get_presigned_url(
         self,
@@ -77,7 +88,7 @@ class StorageRepository:
     ) -> str:
         """Generate presigned URL for worker to download image."""
         try:
-            url = self._client.presigned_get_object(
+            url = self._get_presign_client().presigned_get_object(
                 bucket_name=bucket or self._bucket_images,
                 object_name=object_name,
                 expires=expires,
@@ -85,6 +96,22 @@ class StorageRepository:
             return url
         except S3Error as exc:
             raise StorageError(f"Failed to create presigned URL: {exc}") from exc
+
+    def get_presigned_put_url(
+        self,
+        object_name: str,
+        bucket: Optional[str] = None,
+        expires: timedelta = timedelta(hours=1),
+    ) -> str:
+        """Generate a presigned PUT URL for worker-side image upload."""
+        try:
+            return self._get_presign_client().presigned_put_object(
+                bucket_name=bucket or self._bucket_images,
+                object_name=object_name,
+                expires=expires,
+            )
+        except S3Error as exc:
+            raise StorageError(f"Failed to create presigned upload URL: {exc}") from exc
 
     # ── Model management ─────────────────────────────────────
     # Path convention: {type}/{name}_v{version}/model.onnx

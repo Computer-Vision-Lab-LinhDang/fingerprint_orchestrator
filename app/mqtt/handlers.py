@@ -9,7 +9,14 @@ from typing import Optional
 
 import aiomqtt
 
-from app.schemas.mqtt_payloads import HeartbeatPayload, TaskResult, ModelStatusReport, WorkerStatus
+from app.schemas.mqtt_payloads import (
+    EnrollmentUploadCommand,
+    EnrollmentUploadStatus,
+    HeartbeatPayload,
+    ModelStatusReport,
+    TaskResult,
+    WorkerStatus,
+)
 from app.services.worker_service import get_worker_service
 
 logger = logging.getLogger(__name__)
@@ -48,6 +55,8 @@ async def on_message(message: aiomqtt.Message) -> None:
             await _handle_worker_message(parts[1], message)
         elif len(parts) >= 3 and parts[0] == "worker" and parts[2] == "enrolled":
             await _handle_worker_enrolled(parts[1], message)
+        elif len(parts) >= 5 and parts[0] == "worker" and parts[2] == "enrollment" and parts[3] == "upload" and parts[4] == "status":
+            await _handle_enrollment_upload_status(parts[1], message)
         elif len(parts) >= 4 and parts[0] == "worker" and parts[2] == "model" and parts[3] == "status":
             await _handle_model_status(parts[1], message)
         elif len(parts) >= 2 and parts[0] == "result":
@@ -67,6 +76,8 @@ async def _handle_heartbeat(worker_id: str, message: aiomqtt.Message) -> None:
         data = json.loads(message.payload.decode())
         heartbeat = HeartbeatPayload(**data)
         service = get_worker_service()
+        previous = service.workers.get(worker_id)
+        previous_status = previous.status if previous else None
         service.update_heartbeat(
             worker_id=worker_id,
             status=heartbeat.status,
@@ -75,6 +86,8 @@ async def _handle_heartbeat(worker_id: str, message: aiomqtt.Message) -> None:
             current_task_id=heartbeat.current_task_id,
             loaded_models=heartbeat.loaded_models,
         )
+        if previous is None or previous_status == WorkerStatus.OFFLINE:
+            await _request_worker_sync_check(worker_id, reason="reconnect")
         _write_log("heartbeat", worker_id, {
             "status": heartbeat.status.value,
             "uptime_seconds": heartbeat.uptime_seconds,
@@ -173,8 +186,76 @@ async def _handle_model_status(worker_id: str, message: aiomqtt.Message) -> None
         logger.error("Error processing model status from '%s': %s", worker_id, exc)
 
 
+async def _request_worker_sync_check(worker_id: str, reason: str) -> None:
+    from app.mqtt.broker import get_mqtt_broker
+
+    broker = get_mqtt_broker()
+    if not broker.client:
+        return
+    topic = f"task/{worker_id}/sync/check"
+    payload = json.dumps({"reason": reason})
+    await broker.publish(broker.client, topic, payload, qos=1)
+
+
+async def _broadcast_sync_to_other_workers(source_worker_id: str, payload: dict) -> None:
+    from app.mqtt.broker import get_mqtt_broker
+
+    broker = get_mqtt_broker()
+    if not broker.client:
+        return
+
+    worker_service = get_worker_service()
+    for target_worker_id, worker in worker_service.workers.items():
+        if target_worker_id == source_worker_id:
+            continue
+        if worker.status == WorkerStatus.OFFLINE:
+            continue
+        topic = f"task/{target_worker_id}/sync"
+        await broker.publish(broker.client, topic, json.dumps(payload), qos=1)
+
+
+async def _dispatch_enrollment_upload_command(
+    worker_id: str,
+    payload: EnrollmentUploadCommand,
+) -> None:
+    from app.mqtt.broker import get_mqtt_broker
+
+    broker = get_mqtt_broker()
+    if not broker.client:
+        return
+    topic = f"task/{worker_id}/enrollment/upload"
+    await broker.publish(
+        broker.client,
+        topic,
+        payload.json(),
+        qos=1,
+    )
+
+
+async def _handle_enrollment_upload_status(worker_id: str, message: aiomqtt.Message) -> None:
+    try:
+        data = json.loads(message.payload.decode())
+        status = EnrollmentUploadStatus(**data)
+
+        if status.status == "uploaded" and status.object_name:
+            from app.repositories.fingerprint_repo import get_fingerprint_repo
+
+            fp_repo = get_fingerprint_repo()
+            await fp_repo.update_image_path(status.fingerprint_id, status.object_name)
+
+        _write_log("worker_enrollment_upload", worker_id, data)
+        logger.info(
+            "Enrollment upload status from worker '%s': fp=%s status=%s",
+            worker_id,
+            status.fingerprint_id,
+            status.status,
+        )
+    except Exception as exc:
+        logger.error("Error processing enrollment upload status from '%s': %s", worker_id, exc)
+
+
 async def _handle_worker_enrolled(worker_id: str, message: aiomqtt.Message) -> None:
-    """Persist worker-side enrollment event into orchestrator Postgres + MinIO."""
+    """Persist worker enrollment, ask source worker to upload image, then broadcast sync."""
     try:
         data = json.loads(message.payload.decode())
         user = data.get("user", {})
@@ -186,9 +267,7 @@ async def _handle_worker_enrolled(worker_id: str, message: aiomqtt.Message) -> N
         finger_index = int(fp.get("finger_index", 0))
         vector = fp.get("embedding") or []
         quality_score = float(fp.get("quality_score", 0) or 0)
-        image_b64 = fp.get("image_base64") or ""
-        image_width = int(fp.get("image_width", 192) or 192)
-        image_height = int(fp.get("image_height", 192) or 192)
+        image_available = bool(fp.get("image_available"))
 
         if not username or not vector:
             logger.warning("Skip worker enrollment: missing employee_id or embedding")
@@ -208,45 +287,6 @@ async def _handle_worker_enrolled(worker_id: str, message: aiomqtt.Message) -> N
         else:
             user_id = str(uuid.uuid4())
             await user_repo.create(user_id, username, fullname or username)
-
-        image_path = ""
-        if image_b64:
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            image_name = f"{username}_f{finger_index}_{ts}.png"
-
-            upload_b64 = image_b64
-            content_type = "image/png"
-
-            try:
-                import base64 as _b64
-                raw = _b64.b64decode(image_b64)
-                is_container = (
-                    raw.startswith(b"\x89PNG\r\n\x1a\n")
-                    or raw.startswith(b"\xff\xd8\xff")
-                    or raw.startswith(b"II*\x00")
-                    or raw.startswith(b"MM\x00*")
-                )
-
-                # Sensor often sends raw grayscale bytes (W*H). Convert to PNG.
-                if not is_container and len(raw) == image_width * image_height:
-                    from io import BytesIO
-                    from PIL import Image
-
-                    img = Image.frombytes("L", (image_width, image_height), raw)
-                    buf = BytesIO()
-                    img.save(buf, format="PNG")
-                    upload_b64 = _b64.b64encode(buf.getvalue()).decode("ascii")
-                    content_type = "image/png"
-            except Exception:
-                # Keep original payload if conversion fails.
-                pass
-
-            storage.upload_image(
-                filename=image_name,
-                image_base64=upload_b64,
-                content_type=content_type,
-            )
-            image_path = image_name
 
         # Map local finger index 0..9 -> string labels used by orchestrator.
         finger_map = {
@@ -276,9 +316,26 @@ async def _handle_worker_enrolled(worker_id: str, message: aiomqtt.Message) -> N
             finger_id=finger_type,
             embedding=vector,
             model_name=model_name,
-            image_path=image_path,
+            image_path="",
             quality_score=quality_score,
         )
+
+        if image_available:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            object_name = f"{username}_f{finger_index}_{ts}.tif"
+            upload_url = storage.get_presigned_put_url(object_name)
+            await _dispatch_enrollment_upload_command(
+                worker_id,
+                EnrollmentUploadCommand(
+                    fp_id=int(fp.get("fp_id", 0) or 0),
+                    fingerprint_id=fingerprint_id,
+                    object_name=object_name,
+                    upload_url=upload_url,
+                    content_type="image/tiff",
+                ),
+            )
+
+        await _broadcast_sync_to_other_workers(worker_id, data)
 
         _write_log("worker_enrolled", worker_id, {
             "username": username,
@@ -286,7 +343,7 @@ async def _handle_worker_enrolled(worker_id: str, message: aiomqtt.Message) -> N
             "finger_type": finger_type,
             "vector_dim": len(vector),
             "quality_score": quality_score,
-            "image_path": image_path,
+            "image_available": image_available,
         })
         logger.info(
             "Synced worker enrollment: worker=%s user=%s fp=%s",

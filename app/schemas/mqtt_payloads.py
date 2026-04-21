@@ -66,6 +66,26 @@ class ModelStatusReport(BaseModel):
     error: Optional[str] = None
 
 
+class EnrollmentUploadCommand(BaseModel):
+    """Orchestrator → Worker: upload a cached enrollment image to MinIO."""
+
+    fp_id: int
+    fingerprint_id: str
+    object_name: str
+    upload_url: str
+    content_type: str = "image/tiff"
+
+
+class EnrollmentUploadStatus(BaseModel):
+    """Worker → Orchestrator: status of a presigned image upload."""
+
+    worker_id: str
+    fp_id: int
+    fingerprint_id: str
+    object_name: str = ""
+    status: str
+
+
 class MatchPayload(BaseModel):
     task_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     task_type: TaskType = TaskType.MATCH
