@@ -143,27 +143,73 @@ class Database:
                 ON fingerprints (user_id);
             """)
 
-            # Migration: rename finger_id → finger_index if needed
+            finger_index_exists = await conn.fetchval("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'fingerprints' AND column_name = 'finger_index'
+                )
+            """)
             finger_id_exists = await conn.fetchval("""
                 SELECT EXISTS (
                     SELECT 1 FROM information_schema.columns
                     WHERE table_name = 'fingerprints' AND column_name = 'finger_id'
                 )
             """)
-            if finger_id_exists:
-                finger_index_exists = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_name = 'fingerprints' AND column_name = 'finger_index'
-                    )
+            finger_type_exists = await conn.fetchval("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'fingerprints' AND column_name = 'finger_type'
+                )
+            """)
+
+            if not finger_index_exists:
+                await conn.execute("""
+                    ALTER TABLE fingerprints ADD COLUMN finger_index INTEGER;
                 """)
-                if not finger_index_exists:
-                    # finger_id was VARCHAR, finger_index is INTEGER; add new column + migrate
+
+                if finger_type_exists:
                     await conn.execute("""
-                        ALTER TABLE fingerprints ADD COLUMN finger_index INTEGER NOT NULL DEFAULT 1;
+                        UPDATE fingerprints
+                        SET finger_index = CASE LOWER(COALESCE(finger_type, ''))
+                            WHEN 'right_thumb' THEN 0
+                            WHEN 'right_index' THEN 1
+                            WHEN 'right_middle' THEN 2
+                            WHEN 'right_ring' THEN 3
+                            WHEN 'right_little' THEN 4
+                            WHEN 'left_thumb' THEN 5
+                            WHEN 'left_index' THEN 6
+                            WHEN 'left_middle' THEN 7
+                            WHEN 'left_ring' THEN 8
+                            WHEN 'left_little' THEN 9
+                            ELSE 1
+                        END
+                        WHERE finger_index IS NULL;
                     """)
-                    await conn.execute("ALTER TABLE fingerprints DROP COLUMN finger_id;")
-                    logger.info("Migrated fingerprints: finger_id → finger_index")
+                    logger.info("Migrated fingerprints: populated finger_index from finger_type")
+                elif finger_id_exists:
+                    await conn.execute("""
+                        UPDATE fingerprints
+                        SET finger_index = CASE
+                            WHEN NULLIF(TRIM(finger_id), '') ~ '^[0-9]+$'
+                                THEN LEAST(9, GREATEST(0, TRIM(finger_id)::INTEGER))
+                            ELSE 1
+                        END
+                        WHERE finger_index IS NULL;
+                    """)
+                    logger.info("Migrated fingerprints: populated finger_index from finger_id")
+
+                await conn.execute("""
+                    UPDATE fingerprints
+                    SET finger_index = 1
+                    WHERE finger_index IS NULL;
+                """)
+                await conn.execute("""
+                    ALTER TABLE fingerprints ALTER COLUMN finger_index SET DEFAULT 1;
+                """)
+                await conn.execute("""
+                    ALTER TABLE fingerprints ALTER COLUMN finger_index SET NOT NULL;
+                """)
+                logger.info("Migrated fingerprints: added finger_index column")
 
             # Add missing columns
             for col_name, col_def in [

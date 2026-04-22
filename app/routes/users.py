@@ -14,10 +14,24 @@ router = APIRouter(prefix="/api", tags=["Users"])
 settings = get_settings()
 
 
+def _serialize_user(user: dict) -> dict:
+    employee_id = user.get("employee_id", "") or ""
+    full_name = user.get("full_name", "") or ""
+    return {
+        **user,
+        # Backward-compatible aliases for dashboard/frontend code that still
+        # expects the legacy field names.
+        "username": employee_id,
+        "name": full_name,
+        "metadata": user.get("metadata", {}) or {},
+    }
+
+
 @router.get("/users")
 async def list_users():
     repo = get_user_repo()
-    return await repo.list_all()
+    users = await repo.list_all()
+    return [_serialize_user(user) for user in users]
 
 
 @router.get("/users/{user_id}")
@@ -30,7 +44,7 @@ async def get_user(user_id: str):
         raise HTTPException(404, "User not found")
 
     fingerprints = await fp_repo.list_by_user(user_id)
-    return {"user": user, "fingerprints": fingerprints}
+    return {"user": _serialize_user(user), "fingerprints": fingerprints}
 
 
 @router.delete("/users/{user_id}")
