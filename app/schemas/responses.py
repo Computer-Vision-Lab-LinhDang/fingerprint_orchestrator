@@ -16,7 +16,7 @@ class RegisterResponse(BaseModel):
 # ── Verification ─────────────────────────────────────────────
 class MatchItem(BaseModel):
     user_id: str
-    finger_id: str
+    finger_index: int
     similarity: float
     fingerprint_id: str
 

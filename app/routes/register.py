@@ -39,16 +39,17 @@ async def register(request: Request, body: RegisterRequest):
     try:
         result = await register_fingerprint(
             mqtt_client=mqtt_client,
-            user_id=body.user_id,
-            finger_id=body.finger_id,
+            employee_id=body.employee_id,
+            full_name=body.full_name,
             image_base64=body.image_base64,
-            metadata=body.metadata,
+            finger_index=body.finger_index,
+            department=body.department,
         )
         return RegisterResponse(
             success=True,
             message="Fingerprint registered successfully.",
-            user_id=result["user_id"],
-            fingerprint_id=result["fingerprint_id"],
+            user_id=result.get("employee_id", ""),
+            fingerprint_id=result.get("fingerprint_id"),
         )
 
     except NoWorkerAvailableError:

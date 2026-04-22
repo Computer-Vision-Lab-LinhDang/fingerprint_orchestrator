@@ -27,12 +27,13 @@ def get_pending_registrations() -> dict:
 
 async def register_fingerprint(
     client: aiomqtt.Client,
-    username: str,
-    fullname: str,
+    employee_id: str,
+    full_name: str,
     image_base64: str,
-    finger_type: str = "right_thumb",
+    finger_index: int = 1,
     image_filename: str = "",
     content_type: str = "image/tiff",
+    department: str = "",
 ) -> dict:
     storage = get_storage_repo()
     worker_svc = get_worker_service()
@@ -42,9 +43,9 @@ async def register_fingerprint(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     if image_filename:
         ext = image_filename.rsplit(".", 1)[-1] if "." in image_filename else "tif"
-        object_name = f"{username}_{finger_type}_{timestamp}.{ext}"
+        object_name = f"{employee_id}_{finger_index}_{timestamp}.{ext}"
     else:
-        object_name = f"{username}_{timestamp}.tif"
+        object_name = f"{employee_id}_{timestamp}.tif"
 
     storage.upload_image(
         filename=object_name,
@@ -76,18 +77,20 @@ async def register_fingerprint(
         task_type=TaskType.EMBED,
         image_url=image_url,
         extra={
-            "username": username,
-            "fullname": fullname,
-            "finger_type": finger_type,
+            "employee_id": employee_id,
+            "full_name": full_name,
+            "finger_index": finger_index,
+            "department": department,
             "image_path": object_name,
         },
     )
 
     _pending_registrations[task_id] = {
         "task_id": task_id,
-        "username": username,
-        "fullname": fullname,
-        "finger_type": finger_type,
+        "employee_id": employee_id,
+        "full_name": full_name,
+        "finger_index": finger_index,
+        "department": department,
         "image_path": object_name,
         "worker_id": worker_id,
         "status": "processing",
@@ -99,13 +102,13 @@ async def register_fingerprint(
 
     logger.info(
         "Registration task '%s' → worker '%s' for user '%s'",
-        task_id, worker_id, username,
+        task_id, worker_id, employee_id,
     )
 
     return {
         "task_id": task_id,
-        "username": username,
-        "fullname": fullname,
+        "employee_id": employee_id,
+        "full_name": full_name,
         "worker_id": worker_id,
         "status": "processing",
         "message": "Task dispatched to worker. Await result.",
@@ -137,36 +140,39 @@ async def handle_embed_result(task_id: str, result: dict) -> Optional[dict]:
     user_repo = get_user_repo()
     fp_repo = get_fingerprint_repo()
 
-    username = registration["username"]
-    fullname = registration["fullname"]
+    employee_id = registration["employee_id"]
+    full_name = registration["full_name"]
+    department = registration.get("department", "")
 
-    existing_user = await user_repo.find_by_username(username)
+    existing_user = await user_repo.find_by_employee_id(employee_id)
     if existing_user:
         user_id = existing_user["user_id"]
     else:
         user_id = str(uuid.uuid4())
-        await user_repo.create(user_id, username, fullname)
+        await user_repo.create(
+            user_id, employee_id, full_name, department=department,
+        )
 
     fingerprint_id = "fp_" + str(uuid.uuid4())[:8]
     await fp_repo.save(
         fingerprint_id=fingerprint_id,
         user_id=user_id,
-        finger_id=registration["finger_type"],
+        finger_index=registration.get("finger_index", 1),
         embedding=vector,
-        model_name=model_name,
+        model_version=model_name,
         image_path=registration.get("image_path", ""),
     )
 
     logger.info(
         "Registration complete: user=%s, fp=%s, %dD vector, %.1fms",
-        username, fingerprint_id, vector_dim, processing_time_ms,
+        employee_id, fingerprint_id, vector_dim, processing_time_ms,
     )
 
     return {
         "task_id": task_id,
         "status": "completed",
-        "username": username,
-        "fullname": fullname,
+        "employee_id": employee_id,
+        "full_name": full_name,
         "fingerprint_id": fingerprint_id,
         "vector_dim": vector_dim,
         "processing_time_ms": processing_time_ms,

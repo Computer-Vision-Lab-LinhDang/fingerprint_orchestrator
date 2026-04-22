@@ -39,7 +39,7 @@ async def delete_user(user_id: str):
     fp_repo = get_fingerprint_repo()
     storage = get_storage_repo()
 
-    username = await user_repo.get_username(user_id)
+    employee_id = await user_repo.get_employee_id(user_id)
     image_paths = await fp_repo.get_image_paths_by_user(user_id)
 
     deleted_paths = set()
@@ -50,10 +50,10 @@ async def delete_user(user_id: str):
         except Exception as exc:
             logger.warning("Failed to delete image %s: %s", path, exc)
 
-    if username:
+    if employee_id:
         try:
             objects = storage._client.list_objects(
-                settings.MINIO_BUCKET_IMAGES, prefix=f"{username}_", recursive=True
+                settings.MINIO_BUCKET_IMAGES, prefix=f"{employee_id}_", recursive=True
             )
             for obj in objects:
                 if obj.object_name not in deleted_paths:

@@ -8,6 +8,8 @@ from app.core.exceptions import DatabaseError
 
 logger = logging.getLogger(__name__)
 
+EMBEDDING_DIM = 256
+
 
 class FingerprintRepository:
     """Data access layer for fingerprint CRUD operations."""
@@ -19,12 +21,12 @@ class FingerprintRepository:
         self,
         fingerprint_id: str,
         user_id: str,
-        finger_id: str,
-        embedding: list[float],
-        model_name: str = "default",
+        finger_index: int = 1,
+        embedding: list[float] | None = None,
+        model_version: str = "default",
         image_path: str = "",
+        image_hash: str = "",
         quality_score: float = 0.0,
-        metadata: Optional[dict[str, Any]] = None,
     ) -> str:
         try:
             async with self._db.acquire() as conn:
@@ -32,7 +34,7 @@ class FingerprintRepository:
                 target_dim = await conn.fetchval(
                     """
                     SELECT COALESCE(
-                        (regexp_match(format_type(a.atttypid, a.atttypmod), 'vector\\((\\d+)\\)'))[1]::int,
+                        (regexp_match(format_type(a.atttypid, a.atttypmod), 'vector\\((\d+)\\)'))[1]::int,
                         $1
                     )
                     FROM pg_attribute a
@@ -43,35 +45,41 @@ class FingerprintRepository:
                       AND n.nspname = current_schema()
                     LIMIT 1
                     """,
-                    len(embedding),
+                    EMBEDDING_DIM,
                 )
                 if not isinstance(target_dim, int) or target_dim <= 0:
-                    target_dim = len(embedding)
+                    target_dim = EMBEDDING_DIM
 
-                vector = list(embedding)
-                if len(vector) > target_dim:
-                    vector = vector[:target_dim]
-                elif len(vector) < target_dim:
-                    vector = vector + [0.0] * (target_dim - len(vector))
+                if embedding:
+                    vector = list(embedding)
+                    if len(vector) > target_dim:
+                        vector = vector[:target_dim]
+                    elif len(vector) < target_dim:
+                        vector = vector + [0.0] * (target_dim - len(vector))
+                    vector_str = "[" + ",".join(str(v) for v in vector) + "]"
+                else:
+                    vector_str = None
 
-                vector_str = "[" + ",".join(str(v) for v in vector) + "]"
                 await conn.execute(
                     """
                     INSERT INTO fingerprints
-                        (fingerprint_id, user_id, finger_type, embedding, model_version, image_path, quality_score)
-                    VALUES ($1, $2, $3, $4::vector, $5, $6, $7)
+                        (fingerprint_id, user_id, finger_index, embedding,
+                         model_version, image_path, image_hash, quality_score)
+                    VALUES ($1, $2, $3, $4::vector, $5, $6, $7, $8)
                     ON CONFLICT (fingerprint_id) DO UPDATE SET
                         embedding      = EXCLUDED.embedding,
                         model_version  = EXCLUDED.model_version,
                         image_path     = EXCLUDED.image_path,
+                        image_hash     = EXCLUDED.image_hash,
                         quality_score  = EXCLUDED.quality_score
                     """,
                     fingerprint_id,
                     user_id,
-                    finger_id,
+                    finger_index,
                     vector_str,
-                    model_name,
+                    model_version,
                     image_path,
+                    image_hash,
                     quality_score,
                 )
                 logger.info("Saved fingerprint: %s (user=%s)", fingerprint_id, user_id)
@@ -94,10 +102,11 @@ class FingerprintRepository:
                     SELECT
                         fingerprint_id,
                         user_id,
-                        finger_id,
+                        finger_index,
                         1 - (embedding <=> $1::vector) AS similarity
                     FROM fingerprints
-                    WHERE 1 - (embedding <=> $1::vector) >= $2
+                    WHERE is_active = TRUE
+                      AND 1 - (embedding <=> $1::vector) >= $2
                     ORDER BY similarity DESC
                     LIMIT $3
                     """,
@@ -142,7 +151,7 @@ class FingerprintRepository:
         async with self._db.acquire() as conn:
             if user_id:
                 rows = await conn.fetch(
-                    """SELECT f.*, u.name as user_name
+                    """SELECT f.*, u.full_name as user_name
                        FROM fingerprints f
                        JOIN users u ON u.user_id = f.user_id
                        WHERE f.user_id = $1
@@ -151,7 +160,7 @@ class FingerprintRepository:
                 )
             else:
                 rows = await conn.fetch(
-                    """SELECT f.*, u.name as user_name
+                    """SELECT f.*, u.full_name as user_name
                        FROM fingerprints f
                        JOIN users u ON u.user_id = f.user_id
                        ORDER BY f.created_at DESC"""
@@ -165,6 +174,29 @@ class FingerprintRepository:
                 user_id,
             )
         return [row["image_path"] for row in rows]
+
+    async def list_all_with_embeddings(self) -> list[dict[str, Any]]:
+        """Return all fingerprints with raw embedding vectors (for sync)."""
+        async with self._db.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT fingerprint_id, user_id, finger_index,
+                          embedding::text as embedding_text,
+                          model_version, quality_score, image_path, image_hash
+                   FROM fingerprints
+                   WHERE is_active = TRUE
+                   ORDER BY created_at"""
+            )
+        results = []
+        for r in rows:
+            d = dict(r)
+            # Parse pgvector text "[0.1,0.2,...]" to list
+            emb_text = d.pop("embedding_text", "")
+            if emb_text:
+                d["embedding"] = [float(v) for v in emb_text.strip("[]").split(",")]
+            else:
+                d["embedding"] = []
+            results.append(d)
+        return results
 
 
 # ── Singleton ────────────────────────────────────────────────

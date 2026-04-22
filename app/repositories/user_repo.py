@@ -32,24 +32,34 @@ class UserRepository:
             )
         return dict(row) if row else None
 
-    async def find_by_username(self, username: str) -> Optional[dict[str, Any]]:
+    async def find_by_employee_id(self, employee_id: str) -> Optional[dict[str, Any]]:
         async with self._db.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT * FROM users WHERE username = $1", username
+                "SELECT * FROM users WHERE employee_id = $1", employee_id
             )
         return dict(row) if row else None
 
-    async def create(self, user_id: str, username: str, name: str) -> str:
+    async def create(
+        self,
+        user_id: str,
+        employee_id: str,
+        full_name: str,
+        department: str = "",
+        role: str = "user",
+    ) -> str:
         try:
             async with self._db.acquire() as conn:
                 await conn.execute(
                     """
-                    INSERT INTO users (user_id, username, name, metadata)
-                    VALUES ($1, $2, $3, '{}'::jsonb)
+                    INSERT INTO users (user_id, employee_id, full_name, department, role)
+                    VALUES ($1, $2, $3, $4, $5)
                     """,
-                    user_id, username, name,
+                    user_id, employee_id, full_name, department, role,
                 )
-            logger.info("Created user: %s (username=%s, id=%s)", name, username, user_id)
+            logger.info(
+                "Created user: %s (employee_id=%s, id=%s)",
+                full_name, employee_id, user_id,
+            )
             return user_id
         except Exception as exc:
             raise DatabaseError(f"Failed to create user: {exc}") from exc
@@ -61,12 +71,16 @@ class UserRepository:
             )
         return result != "DELETE 0"
 
-    async def get_username(self, user_id: str) -> Optional[str]:
+    async def get_employee_id(self, user_id: str) -> Optional[str]:
         async with self._db.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT username FROM users WHERE user_id = $1", user_id
+                "SELECT employee_id FROM users WHERE user_id = $1", user_id
             )
-        return row["username"] if row else None
+        return row["employee_id"] if row else None
+
+    # Legacy alias for code that still uses the old name
+    find_by_username = find_by_employee_id
+    get_username = get_employee_id
 
 
 _repo: Optional[UserRepository] = None

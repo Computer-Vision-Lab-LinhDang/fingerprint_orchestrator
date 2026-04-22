@@ -54,49 +54,87 @@ class Database:
         async with self.acquire() as conn:
             await conn.execute("CREATE EXTENSION IF NOT EXISTS vector;")
 
-            # Users table
+            # Users table (unified with Worker schema)
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     id              SERIAL PRIMARY KEY,
                     user_id         VARCHAR(255) UNIQUE NOT NULL,
-                    username        VARCHAR(255) UNIQUE NOT NULL,
-                    name            VARCHAR(255) NOT NULL DEFAULT '',
-                    metadata        JSONB DEFAULT '{}',
+                    employee_id     VARCHAR(255) UNIQUE NOT NULL,
+                    full_name       VARCHAR(255) NOT NULL DEFAULT '',
+                    department      VARCHAR(255) NOT NULL DEFAULT '',
+                    role            VARCHAR(50) NOT NULL DEFAULT 'user',
+                    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
                     created_at      TIMESTAMP DEFAULT NOW(),
                     updated_at      TIMESTAMP DEFAULT NOW()
                 );
             """)
 
-            # Migration: add username column if it doesn't exist (for existing DBs)
-            col_exists = await conn.fetchval("""
+            # Migration: rename legacy columns if they exist
+            for old_col, new_col, col_type in [
+                ("username", "employee_id", "VARCHAR(255)"),
+                ("name", "full_name", "VARCHAR(255)"),
+            ]:
+                old_exists = await conn.fetchval("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'users' AND column_name = $1
+                    )
+                """, old_col)
+                if old_exists:
+                    new_exists = await conn.fetchval("""
+                        SELECT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'users' AND column_name = $1
+                        )
+                    """, new_col)
+                    if not new_exists:
+                        await conn.execute(
+                            f"ALTER TABLE users RENAME COLUMN {old_col} TO {new_col};"
+                        )
+                        logger.info("Migrated users table: %s → %s", old_col, new_col)
+
+            # Add missing columns from unified schema
+            for col_name, col_def in [
+                ("department", "VARCHAR(255) NOT NULL DEFAULT ''"),
+                ("role", "VARCHAR(50) NOT NULL DEFAULT 'user'"),
+                ("is_active", "BOOLEAN NOT NULL DEFAULT TRUE"),
+            ]:
+                col_exists = await conn.fetchval("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'users' AND column_name = $1
+                    )
+                """, col_name)
+                if not col_exists:
+                    await conn.execute(
+                        f"ALTER TABLE users ADD COLUMN {col_name} {col_def};"
+                    )
+                    logger.info("Migrated users table: added %s", col_name)
+
+            # Drop legacy metadata column if it exists
+            meta_exists = await conn.fetchval("""
                 SELECT EXISTS (
                     SELECT 1 FROM information_schema.columns
-                    WHERE table_name = 'users' AND column_name = 'username'
+                    WHERE table_name = 'users' AND column_name = 'metadata'
                 )
             """)
-            if not col_exists:
-                await conn.execute("""
-                    ALTER TABLE users ADD COLUMN username VARCHAR(255) UNIQUE;
-                """)
-                # Backfill: set username = user_id for existing rows
-                await conn.execute("""
-                    UPDATE users SET username = user_id WHERE username IS NULL;
-                """)
-                await conn.execute("""
-                    ALTER TABLE users ALTER COLUMN username SET NOT NULL;
-                """)
-                logger.info("Migrated users table: added username column")
+            if meta_exists:
+                await conn.execute("ALTER TABLE users DROP COLUMN metadata;")
+                logger.info("Migrated users table: dropped metadata column")
 
-            # Fingerprints table
+            # Fingerprints table (unified with Worker schema)
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS fingerprints (
                     id              SERIAL PRIMARY KEY,
                     fingerprint_id  VARCHAR(255) UNIQUE NOT NULL,
                     user_id         VARCHAR(255) NOT NULL,
-                    finger_id       VARCHAR(50)  NOT NULL,
-                    embedding       vector(512),
-                    model_name      VARCHAR(255) DEFAULT 'default',
-                    metadata        JSONB DEFAULT '{}',
+                    finger_index    INTEGER NOT NULL DEFAULT 1,
+                    embedding       vector(256),
+                    model_version   VARCHAR(255) DEFAULT 'default',
+                    quality_score   REAL NOT NULL DEFAULT 0,
+                    image_path      VARCHAR(512) DEFAULT '',
+                    image_hash      VARCHAR(255) DEFAULT '',
+                    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
                     created_at      TIMESTAMP DEFAULT NOW()
                 );
             """)
@@ -105,18 +143,46 @@ class Database:
                 ON fingerprints (user_id);
             """)
 
-            # Migration: add image_path column if missing
-            img_col_exists = await conn.fetchval("""
+            # Migration: rename finger_id → finger_index if needed
+            finger_id_exists = await conn.fetchval("""
                 SELECT EXISTS (
                     SELECT 1 FROM information_schema.columns
-                    WHERE table_name = 'fingerprints' AND column_name = 'image_path'
+                    WHERE table_name = 'fingerprints' AND column_name = 'finger_id'
                 )
             """)
-            if not img_col_exists:
-                await conn.execute("""
-                    ALTER TABLE fingerprints ADD COLUMN image_path VARCHAR(512) DEFAULT '';
+            if finger_id_exists:
+                finger_index_exists = await conn.fetchval("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'fingerprints' AND column_name = 'finger_index'
+                    )
                 """)
-                logger.info("Migrated fingerprints table: added image_path column")
+                if not finger_index_exists:
+                    # finger_id was VARCHAR, finger_index is INTEGER; add new column + migrate
+                    await conn.execute("""
+                        ALTER TABLE fingerprints ADD COLUMN finger_index INTEGER NOT NULL DEFAULT 1;
+                    """)
+                    await conn.execute("ALTER TABLE fingerprints DROP COLUMN finger_id;")
+                    logger.info("Migrated fingerprints: finger_id → finger_index")
+
+            # Add missing columns
+            for col_name, col_def in [
+                ("image_path", "VARCHAR(512) DEFAULT ''"),
+                ("image_hash", "VARCHAR(255) DEFAULT ''"),
+                ("is_active", "BOOLEAN NOT NULL DEFAULT TRUE"),
+                ("quality_score", "REAL NOT NULL DEFAULT 0"),
+            ]:
+                col_exists = await conn.fetchval("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'fingerprints' AND column_name = $1
+                    )
+                """, col_name)
+                if not col_exists:
+                    await conn.execute(
+                        f"ALTER TABLE fingerprints ADD COLUMN {col_name} {col_def};"
+                    )
+                    logger.info("Migrated fingerprints: added %s", col_name)
 
             logger.info("Database schema ready.")
 

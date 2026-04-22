@@ -126,10 +126,12 @@ from app.routes.api import router as api_router
 from app.routes.users import router as users_router
 from app.routes.fingerprints import router as fingerprints_router
 from app.routes.models import router as models_router
+from app.routes.sync import router as sync_router
 app.include_router(api_router)
 app.include_router(users_router)
 app.include_router(fingerprints_router)
 app.include_router(models_router)
+app.include_router(sync_router)
 
 
 # ── Run ──────────────────────────────────────────────────────

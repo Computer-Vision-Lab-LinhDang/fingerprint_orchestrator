@@ -286,27 +286,12 @@ async def _handle_worker_enrolled(worker_id: str, message: aiomqtt.Message) -> N
         fp_repo = get_fingerprint_repo()
         storage = get_storage_repo()
 
-        existing_user = await user_repo.find_by_username(username)
+        existing_user = await user_repo.find_by_employee_id(username)
         if existing_user:
             user_id = existing_user["user_id"]
         else:
             user_id = str(uuid.uuid4())
             await user_repo.create(user_id, username, fullname or username)
-
-        # Map local finger index 0..9 -> string labels used by orchestrator.
-        finger_map = {
-            0: "right_thumb",
-            1: "right_index",
-            2: "right_middle",
-            3: "right_ring",
-            4: "right_little",
-            5: "left_thumb",
-            6: "left_index",
-            7: "left_middle",
-            8: "left_ring",
-            9: "left_little",
-        }
-        finger_type = finger_map.get(finger_index, "right_index")
 
         fp_id_raw = fp.get("fp_id")
         if fp_id_raw is not None:
@@ -318,9 +303,9 @@ async def _handle_worker_enrolled(worker_id: str, message: aiomqtt.Message) -> N
         await fp_repo.save(
             fingerprint_id=fingerprint_id,
             user_id=user_id,
-            finger_id=finger_type,
+            finger_index=finger_index,
             embedding=vector,
-            model_name=model_name,
+            model_version=model_name,
             image_path="",
             quality_score=quality_score,
         )
@@ -343,9 +328,9 @@ async def _handle_worker_enrolled(worker_id: str, message: aiomqtt.Message) -> N
         await _broadcast_sync_to_other_workers(worker_id, data)
 
         _write_log("worker_enrolled", worker_id, {
-            "username": username,
+            "employee_id": username,
             "fingerprint_id": fingerprint_id,
-            "finger_type": finger_type,
+            "finger_index": finger_index,
             "vector_dim": len(vector),
             "quality_score": quality_score,
             "image_available": image_available,
@@ -362,21 +347,22 @@ async def _handle_edge_register(edge_id: str, message: aiomqtt.Message) -> None:
     try:
         data = json.loads(message.payload.decode())
         task_id = data.get("task_id", "")
-        username = data.get("username", "")
-        fullname = data.get("fullname", "")
-        finger_type = data.get("finger_type", "right_thumb")
+        employee_id = data.get("employee_id", data.get("username", ""))
+        full_name = data.get("full_name", data.get("fullname", ""))
+        finger_index = int(data.get("finger_index", data.get("finger_type", 1)))
+        department = data.get("department", "")
         image_base64 = data.get("image_base64", "")
         image_filename = data.get("image_filename", "")
 
-        logger.info("📥 Registration from edge '%s': user=%s, name=%s", edge_id, username, fullname)
+        logger.info("📥 Registration from edge '%s': employee_id=%s, name=%s", edge_id, employee_id, full_name)
 
-        if not username or not fullname or not image_base64:
+        if not employee_id or not full_name or not image_base64:
             logger.error("Missing required fields in registration request")
             return
 
         _write_log("edge_register", edge_id, {
-            "task_id": task_id, "username": username,
-            "fullname": fullname, "finger_type": finger_type,
+            "task_id": task_id, "employee_id": employee_id,
+            "full_name": full_name, "finger_index": finger_index,
         })
 
         from app.services.registration_service import register_fingerprint
@@ -390,8 +376,9 @@ async def _handle_edge_register(edge_id: str, message: aiomqtt.Message) -> None:
 
         result = await register_fingerprint(
             client=mqtt_client,
-            username=username, fullname=fullname,
-            image_base64=image_base64, finger_type=finger_type,
+            employee_id=employee_id, full_name=full_name,
+            image_base64=image_base64, finger_index=finger_index,
+            department=department,
             image_filename=image_filename,
         )
 
