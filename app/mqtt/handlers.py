@@ -81,8 +81,13 @@ async def _handle_heartbeat(worker_id: str, message: aiomqtt.Message) -> None:
         service.update_heartbeat(
             worker_id=worker_id,
             status=heartbeat.status,
+            cpu_percent=heartbeat.cpu_percent,
+            ram_used_mb=heartbeat.ram_used_mb,
+            ram_total_mb=heartbeat.ram_total_mb,
+            gpu_percent=heartbeat.gpu_percent,
             gpu_memory_used=heartbeat.gpu_memory_used_mb,
             gpu_memory_total=heartbeat.gpu_memory_total_mb,
+            temperature_c=heartbeat.temperature_c,
             current_task_id=heartbeat.current_task_id,
             loaded_models=heartbeat.loaded_models,
         )

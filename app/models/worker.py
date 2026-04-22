@@ -12,8 +12,13 @@ class WorkerInfo:
     worker_id: str
     status: WorkerStatus = WorkerStatus.OFFLINE
     last_heartbeat: float = 0.0
+    cpu_percent: Optional[float] = None
+    ram_used_mb: Optional[float] = None
+    ram_total_mb: Optional[float] = None
+    gpu_percent: Optional[float] = None
     gpu_memory_used_mb: Optional[float] = None
     gpu_memory_total_mb: Optional[float] = None
+    temperature_c: Optional[float] = None
     current_task_id: Optional[str] = None
     task_count: int = 0
     loaded_models: dict = field(default_factory=dict)  # {"embedding": "embedding_v1", ...}

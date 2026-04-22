@@ -38,8 +38,13 @@ class WorkerService:
         self,
         worker_id: str,
         status: WorkerStatus,
+        cpu_percent: Optional[float] = None,
+        ram_used_mb: Optional[float] = None,
+        ram_total_mb: Optional[float] = None,
+        gpu_percent: Optional[float] = None,
         gpu_memory_used: Optional[float] = None,
         gpu_memory_total: Optional[float] = None,
+        temperature_c: Optional[float] = None,
         current_task_id: Optional[str] = None,
         loaded_models: Optional[dict] = None,
     ) -> None:
@@ -52,8 +57,13 @@ class WorkerService:
         worker = self._workers[worker_id]
         worker.status = status
         worker.last_heartbeat = now
+        worker.cpu_percent = cpu_percent
+        worker.ram_used_mb = ram_used_mb
+        worker.ram_total_mb = ram_total_mb
+        worker.gpu_percent = gpu_percent
         worker.gpu_memory_used_mb = gpu_memory_used
         worker.gpu_memory_total_mb = gpu_memory_total
+        worker.temperature_c = temperature_c
         worker.current_task_id = current_task_id
         if loaded_models is not None:
             worker.loaded_models = loaded_models
@@ -115,8 +125,13 @@ class WorkerService:
                 "worker_id": w.worker_id,
                 "status": w.status.value,
                 "last_heartbeat": w.last_heartbeat,
+                "cpu_percent": w.cpu_percent,
+                "ram_used_mb": w.ram_used_mb,
+                "ram_total_mb": w.ram_total_mb,
+                "gpu_percent": w.gpu_percent,
                 "gpu_memory_used_mb": w.gpu_memory_used_mb,
                 "gpu_memory_total_mb": w.gpu_memory_total_mb,
+                "temperature_c": w.temperature_c,
                 "current_task_id": w.current_task_id,
                 "task_count": w.task_count,
                 "loaded_models": w.loaded_models,

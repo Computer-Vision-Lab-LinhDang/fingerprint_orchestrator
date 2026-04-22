@@ -133,8 +133,13 @@ class MatchResult(BaseModel):
 class HeartbeatPayload(BaseModel):
     worker_id: str
     status: WorkerStatus
+    cpu_percent: Optional[float] = None
+    ram_used_mb: Optional[float] = None
+    ram_total_mb: Optional[float] = None
+    gpu_percent: Optional[float] = None
     gpu_memory_used_mb: Optional[float] = None
     gpu_memory_total_mb: Optional[float] = None
+    temperature_c: Optional[float] = None
     current_task_id: Optional[str] = None
     uptime_seconds: Optional[float] = None
     loaded_models: dict[str, str] = Field(default_factory=dict)
