@@ -64,6 +64,7 @@ class Database:
                     department      VARCHAR(255) NOT NULL DEFAULT '',
                     role            VARCHAR(50) NOT NULL DEFAULT 'user',
                     is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+                    deleted_at      TIMESTAMP NULL,
                     created_at      TIMESTAMP DEFAULT NOW(),
                     updated_at      TIMESTAMP DEFAULT NOW()
                 );
@@ -98,6 +99,7 @@ class Database:
                 ("department", "VARCHAR(255) NOT NULL DEFAULT ''"),
                 ("role", "VARCHAR(50) NOT NULL DEFAULT 'user'"),
                 ("is_active", "BOOLEAN NOT NULL DEFAULT TRUE"),
+                ("deleted_at", "TIMESTAMP NULL"),
             ]:
                 col_exists = await conn.fetchval("""
                     SELECT EXISTS (
@@ -135,6 +137,7 @@ class Database:
                     image_path      VARCHAR(512) DEFAULT '',
                     image_hash      VARCHAR(255) DEFAULT '',
                     is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+                    deleted_at      TIMESTAMP NULL,
                     created_at      TIMESTAMP DEFAULT NOW()
                 );
             """)
@@ -216,6 +219,7 @@ class Database:
                 ("image_path", "VARCHAR(512) DEFAULT ''"),
                 ("image_hash", "VARCHAR(255) DEFAULT ''"),
                 ("is_active", "BOOLEAN NOT NULL DEFAULT TRUE"),
+                ("deleted_at", "TIMESTAMP NULL"),
                 ("quality_score", "REAL NOT NULL DEFAULT 0"),
             ]:
                 col_exists = await conn.fetchval("""

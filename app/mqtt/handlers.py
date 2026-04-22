@@ -325,9 +325,22 @@ async def _handle_worker_enrolled(worker_id: str, message: aiomqtt.Message) -> N
         existing_user = await user_repo.find_by_employee_id(username)
         if existing_user:
             user_id = existing_user["user_id"]
+            if not existing_user.get("is_active", True):
+                await user_repo.reactivate(
+                    user_id,
+                    full_name=fullname or username,
+                    department=user.get("department", ""),
+                    role=user.get("role", "user"),
+                )
         else:
             user_id = str(uuid.uuid4())
-            await user_repo.create(user_id, username, fullname or username)
+            await user_repo.create(
+                user_id,
+                username,
+                fullname or username,
+                user.get("department", ""),
+                user.get("role", "user"),
+            )
 
         fp_id_raw = fp.get("fp_id")
         if fp_id_raw is not None:

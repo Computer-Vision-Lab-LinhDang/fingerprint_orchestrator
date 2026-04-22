@@ -147,6 +147,12 @@ async def handle_embed_result(task_id: str, result: dict) -> Optional[dict]:
     existing_user = await user_repo.find_by_employee_id(employee_id)
     if existing_user:
         user_id = existing_user["user_id"]
+        if not existing_user.get("is_active", True):
+            await user_repo.reactivate(
+                user_id,
+                full_name=full_name,
+                department=department,
+            )
     else:
         user_id = str(uuid.uuid4())
         await user_repo.create(

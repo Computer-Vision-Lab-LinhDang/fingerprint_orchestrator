@@ -80,9 +80,10 @@ async def delete_user(user_id: str):
         except Exception as exc:
             logger.warning("Failed to scan MinIO for user images: %s", exc)
 
-    deleted = await user_repo.delete(user_id)
+    deleted = await user_repo.soft_delete(user_id)
     if not deleted:
         raise HTTPException(404, "User not found")
+    await fp_repo.soft_delete_by_user(user_id)
 
     try:
         await broadcast_user_deleted(

@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from app.db.database import get_database
 from app.core.exceptions import DatabaseError
+from app.db.database import get_database
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +30,10 @@ class FingerprintRepository:
     ) -> str:
         try:
             async with self._db.acquire() as conn:
-                # Adapt vector size to the actual pgvector dimension in DB.
                 target_dim = await conn.fetchval(
                     """
                     SELECT COALESCE(
-                        (regexp_match(format_type(a.atttypid, a.atttypmod), 'vector\\((\d+)\\)'))[1]::int,
+                        (regexp_match(format_type(a.atttypid, a.atttypmod), 'vector\\((\\d+)\\)'))[1]::int,
                         $1
                     )
                     FROM pg_attribute a
@@ -64,14 +63,19 @@ class FingerprintRepository:
                     """
                     INSERT INTO fingerprints
                         (fingerprint_id, user_id, finger_index, embedding,
-                         model_version, image_path, image_hash, quality_score)
-                    VALUES ($1, $2, $3, $4::vector, $5, $6, $7, $8)
+                         model_version, image_path, image_hash, quality_score,
+                         is_active, deleted_at)
+                    VALUES ($1, $2, $3, $4::vector, $5, $6, $7, $8, TRUE, NULL)
                     ON CONFLICT (fingerprint_id) DO UPDATE SET
-                        embedding      = EXCLUDED.embedding,
-                        model_version  = EXCLUDED.model_version,
-                        image_path     = EXCLUDED.image_path,
-                        image_hash     = EXCLUDED.image_hash,
-                        quality_score  = EXCLUDED.quality_score
+                        user_id         = EXCLUDED.user_id,
+                        finger_index    = EXCLUDED.finger_index,
+                        embedding       = EXCLUDED.embedding,
+                        model_version   = EXCLUDED.model_version,
+                        image_path      = EXCLUDED.image_path,
+                        image_hash      = EXCLUDED.image_hash,
+                        quality_score   = EXCLUDED.quality_score,
+                        is_active       = TRUE,
+                        deleted_at      = NULL
                     """,
                     fingerprint_id,
                     user_id,
@@ -93,7 +97,6 @@ class FingerprintRepository:
         top_k: int = 5,
         threshold: float = 0.7,
     ) -> list[dict[str, Any]]:
-        """Search for similar fingerprints using cosine distance (pgvector)."""
         try:
             async with self._db.acquire() as conn:
                 vector_str = "[" + ",".join(str(v) for v in query_vector) + "]"
@@ -118,13 +121,15 @@ class FingerprintRepository:
         except Exception as exc:
             raise DatabaseError(f"Similarity search failed: {exc}") from exc
 
-    async def get_by_id(self, fingerprint_id: str) -> Optional[dict[str, Any]]:
+    async def get_by_id(
+        self, fingerprint_id: str, active_only: bool = False
+    ) -> Optional[dict[str, Any]]:
+        sql = "SELECT * FROM fingerprints WHERE fingerprint_id = $1"
+        if active_only:
+            sql += " AND is_active = TRUE"
         async with self._db.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT * FROM fingerprints WHERE fingerprint_id = $1",
-                fingerprint_id,
-            )
-            return dict(row) if row else None
+            row = await conn.fetchrow(sql, fingerprint_id)
+        return dict(row) if row else None
 
     async def update_image_path(self, fingerprint_id: str, image_path: str) -> bool:
         async with self._db.acquire() as conn:
@@ -139,67 +144,97 @@ class FingerprintRepository:
             )
         return result != "UPDATE 0"
 
-    async def delete(self, fingerprint_id: str) -> bool:
+    async def soft_delete(self, fingerprint_id: str) -> bool:
         async with self._db.acquire() as conn:
             result = await conn.execute(
-                "DELETE FROM fingerprints WHERE fingerprint_id = $1",
+                """
+                UPDATE fingerprints
+                SET is_active = FALSE, deleted_at = NOW()
+                WHERE fingerprint_id = $1 AND is_active = TRUE
+                """,
                 fingerprint_id,
             )
-            return result == "DELETE 1"
+        return result != "UPDATE 0"
 
-    async def list_by_user(self, user_id: str = None) -> list[dict[str, Any]]:
+    async def soft_delete_by_user(self, user_id: str) -> str:
         async with self._db.acquire() as conn:
-            if user_id:
-                rows = await conn.fetch(
-                    """SELECT f.*, u.full_name as user_name
-                       FROM fingerprints f
-                       JOIN users u ON u.user_id = f.user_id
-                       WHERE f.user_id = $1
-                       ORDER BY f.created_at DESC""",
-                    user_id,
-                )
-            else:
-                rows = await conn.fetch(
-                    """SELECT f.*, u.full_name as user_name
-                       FROM fingerprints f
-                       JOIN users u ON u.user_id = f.user_id
-                       ORDER BY f.created_at DESC"""
-                )
+            result = await conn.execute(
+                """
+                UPDATE fingerprints
+                SET is_active = FALSE, deleted_at = NOW()
+                WHERE user_id = $1 AND is_active = TRUE
+                """,
+                user_id,
+            )
+        return result
+
+    async def list_by_user(
+        self, user_id: Optional[str] = None, active_only: bool = False
+    ) -> list[dict[str, Any]]:
+        conditions = []
+        params = []
+
+        if user_id:
+            conditions.append("f.user_id = ${}".format(len(params) + 1))
+            params.append(user_id)
+        if active_only:
+            conditions.append("f.is_active = TRUE")
+
+        where_clause = ""
+        if conditions:
+            where_clause = "WHERE " + " AND ".join(conditions)
+
+        async with self._db.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT f.*, u.full_name as user_name
+                FROM fingerprints f
+                JOIN users u ON u.user_id = f.user_id
+                {where_clause}
+                ORDER BY f.created_at DESC
+                """.format(where_clause=where_clause),
+                *params
+            )
         return [dict(r) for r in rows]
 
     async def get_image_paths_by_user(self, user_id: str) -> list[str]:
         async with self._db.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT image_path FROM fingerprints WHERE user_id = $1 AND image_path != ''",
+                """
+                SELECT image_path
+                FROM fingerprints
+                WHERE user_id = $1 AND image_path != '' AND is_active = TRUE
+                """,
                 user_id,
             )
         return [row["image_path"] for row in rows]
 
-    async def list_all_with_embeddings(self) -> list[dict[str, Any]]:
-        """Return all fingerprints with raw embedding vectors (for sync)."""
+    async def list_all_with_embeddings(self, active_only: bool = True) -> list[dict[str, Any]]:
+        where_clause = "WHERE is_active = TRUE" if active_only else ""
         async with self._db.acquire() as conn:
             rows = await conn.fetch(
-                """SELECT fingerprint_id, user_id, finger_index,
-                          embedding::text as embedding_text,
-                          model_version, quality_score, image_path, image_hash
-                   FROM fingerprints
-                   WHERE is_active = TRUE
-                   ORDER BY created_at"""
+                """
+                SELECT fingerprint_id, user_id, finger_index,
+                       embedding::text as embedding_text,
+                       model_version, quality_score, image_path, image_hash,
+                       is_active, deleted_at
+                FROM fingerprints
+                {where_clause}
+                ORDER BY created_at
+                """.format(where_clause=where_clause)
             )
         results = []
-        for r in rows:
-            d = dict(r)
-            # Parse pgvector text "[0.1,0.2,...]" to list
-            emb_text = d.pop("embedding_text", "")
+        for row in rows:
+            data = dict(row)
+            emb_text = data.pop("embedding_text", "")
             if emb_text:
-                d["embedding"] = [float(v) for v in emb_text.strip("[]").split(",")]
+                data["embedding"] = [float(v) for v in emb_text.strip("[]").split(",")]
             else:
-                d["embedding"] = []
-            results.append(d)
+                data["embedding"] = []
+            results.append(data)
         return results
 
 
-# ── Singleton ────────────────────────────────────────────────
 _repo: Optional[FingerprintRepository] = None
 
 

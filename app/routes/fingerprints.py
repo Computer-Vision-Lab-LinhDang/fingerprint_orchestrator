@@ -43,7 +43,9 @@ async def delete_fingerprint(fingerprint_id: str):
         except Exception as exc:
             logger.warning("Failed to delete image %s: %s", fp["image_path"], exc)
 
-    await repo.delete(fingerprint_id)
+    deleted = await repo.soft_delete(fingerprint_id)
+    if not deleted:
+        raise HTTPException(404, "Fingerprint not found")
     try:
         await broadcast_fingerprint_deleted(
             FingerprintDeletedEvent(

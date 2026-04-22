@@ -23,8 +23,8 @@ async def sync_full():
     user_repo = get_user_repo()
     fp_repo = get_fingerprint_repo()
 
-    users = await user_repo.list_all()
-    fingerprints = await fp_repo.list_all_with_embeddings()
+    users = await user_repo.list_all(active_only=True)
+    fingerprints = await fp_repo.list_all_with_embeddings(active_only=True)
 
     return {
         "users": [
