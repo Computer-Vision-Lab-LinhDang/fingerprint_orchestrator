@@ -214,6 +214,20 @@ class Database:
                 """)
                 logger.info("Migrated fingerprints: added finger_index column")
 
+            # Drop legacy columns that are no longer used
+            for old_col in ("finger_type", "finger_id"):
+                old_exists = await conn.fetchval("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'fingerprints' AND column_name = $1
+                    )
+                """, old_col)
+                if old_exists:
+                    await conn.execute(
+                        f"ALTER TABLE fingerprints DROP COLUMN {old_col};"
+                    )
+                    logger.info("Migrated fingerprints: dropped legacy column %s", old_col)
+
             # Add missing columns
             for col_name, col_def in [
                 ("image_path", "VARCHAR(512) DEFAULT ''"),
