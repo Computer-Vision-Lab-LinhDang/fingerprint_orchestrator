@@ -88,10 +88,14 @@ async def _run_mqtt(app: FastAPI, broker):
                 logger.info("MQTT connected and subscribed successfully.")
                 await broker.process_messages(client)
         except asyncio.CancelledError:
+            broker._connected = False
+            broker._client = None
             break
         except Exception as exc:
             logger.error("MQTT disconnected: %s. Reconnecting in 5s...", exc)
             app.state.mqtt_client = None
+            broker._connected = False
+            broker._client = None
             await asyncio.sleep(5)
 
 

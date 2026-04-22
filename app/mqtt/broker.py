@@ -47,6 +47,7 @@ class MQTTBroker:
         for topic, qos in self._subscriptions:
             await client.subscribe(topic, qos=qos)
             logger.info("Subscribed: %s (QoS=%d)", topic, qos)
+        self._connected = True
 
     # ── Message handler ──────────────────────────────────────
     def set_message_handler(self, handler: MessageCallback) -> None:
