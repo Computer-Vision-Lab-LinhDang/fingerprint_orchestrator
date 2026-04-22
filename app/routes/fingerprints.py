@@ -8,8 +8,11 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from app.core.config import get_settings
+from app.mqtt.handlers import broadcast_fingerprint_deleted
 from app.repositories.fingerprint_repo import get_fingerprint_repo
 from app.repositories.storage_repo import get_storage_repo
+from app.repositories.user_repo import get_user_repo
+from app.schemas.mqtt_payloads import FingerprintDeletedEvent
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["Fingerprints"])
@@ -26,10 +29,13 @@ async def list_fingerprints(user_id: Optional[str] = Query(None)):
 async def delete_fingerprint(fingerprint_id: str):
     repo = get_fingerprint_repo()
     storage = get_storage_repo()
+    user_repo = get_user_repo()
 
     fp = await repo.get_by_id(fingerprint_id)
     if not fp:
         raise HTTPException(404, "Fingerprint not found")
+
+    user = await user_repo.find_by_id(fp["user_id"])
 
     if fp.get("image_path"):
         try:
@@ -38,6 +44,17 @@ async def delete_fingerprint(fingerprint_id: str):
             logger.warning("Failed to delete image %s: %s", fp["image_path"], exc)
 
     await repo.delete(fingerprint_id)
+    try:
+        await broadcast_fingerprint_deleted(
+            FingerprintDeletedEvent(
+                fingerprint_id=fingerprint_id,
+                user_id=fp["user_id"],
+                employee_id=(user or {}).get("employee_id", ""),
+                finger_index=int(fp.get("finger_index", 0) or 0),
+            )
+        )
+    except Exception as exc:
+        logger.warning("Failed to broadcast fingerprint delete for %s: %s", fingerprint_id, exc)
     return {"status": "deleted", "fingerprint_id": fingerprint_id}
 
 

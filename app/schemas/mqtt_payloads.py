@@ -76,6 +76,27 @@ class EnrollmentUploadCommand(BaseModel):
     content_type: str = "image/tiff"
 
 
+class UserDeletedEvent(BaseModel):
+    """Orchestrator → Worker: deactivate one user in the worker cache."""
+
+    event: str = "user_deleted"
+    user_id: str
+    employee_id: str = ""
+    full_name: str = ""
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class FingerprintDeletedEvent(BaseModel):
+    """Orchestrator → Worker: deactivate one fingerprint in the worker cache."""
+
+    event: str = "fingerprint_deleted"
+    fingerprint_id: str
+    user_id: str
+    employee_id: str = ""
+    finger_index: int = 0
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
 class EnrollmentUploadStatus(BaseModel):
     """Worker → Orchestrator: status of a presigned image upload."""
 

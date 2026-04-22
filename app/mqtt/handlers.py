@@ -12,9 +12,11 @@ import aiomqtt
 from app.schemas.mqtt_payloads import (
     EnrollmentUploadCommand,
     EnrollmentUploadStatus,
+    FingerprintDeletedEvent,
     HeartbeatPayload,
     ModelStatusReport,
     TaskResult,
+    UserDeletedEvent,
     WorkerStatus,
 )
 from app.services.worker_service import get_worker_service
@@ -219,6 +221,40 @@ async def _broadcast_sync_to_other_workers(source_worker_id: str, payload: dict)
         await broker.publish(broker.client, topic, json.dumps(payload), qos=1)
 
 
+async def broadcast_user_deleted(payload: UserDeletedEvent) -> None:
+    """Broadcast a user deletion event to all currently online workers."""
+    from app.mqtt.broker import get_mqtt_broker
+
+    broker = get_mqtt_broker()
+    if not broker.client:
+        return
+
+    worker_service = get_worker_service()
+    encoded = payload.model_dump_json()
+    for target_worker_id, worker in worker_service.workers.items():
+        if worker.status == WorkerStatus.OFFLINE:
+            continue
+        topic = f"task/{target_worker_id}/sync/delete-user"
+        await broker.publish(broker.client, topic, encoded, qos=1)
+
+
+async def broadcast_fingerprint_deleted(payload: FingerprintDeletedEvent) -> None:
+    """Broadcast a fingerprint deletion event to all currently online workers."""
+    from app.mqtt.broker import get_mqtt_broker
+
+    broker = get_mqtt_broker()
+    if not broker.client:
+        return
+
+    worker_service = get_worker_service()
+    encoded = payload.model_dump_json()
+    for target_worker_id, worker in worker_service.workers.items():
+        if worker.status == WorkerStatus.OFFLINE:
+            continue
+        topic = f"task/{target_worker_id}/sync/delete-fingerprint"
+        await broker.publish(broker.client, topic, encoded, qos=1)
+
+
 async def _dispatch_enrollment_upload_command(
     worker_id: str,
     payload: EnrollmentUploadCommand,
@@ -325,7 +361,22 @@ async def _handle_worker_enrolled(worker_id: str, message: aiomqtt.Message) -> N
                 ),
             )
 
-        await _broadcast_sync_to_other_workers(worker_id, data)
+        sync_payload = {
+            **data,
+            "user": {
+                **user,
+                "user_id": user_id,
+                "id": user_id,
+                "employee_id": username,
+                "full_name": fullname or username,
+            },
+            "fingerprint": {
+                **fp,
+                "fingerprint_id": fingerprint_id,
+                "finger_index": finger_index,
+            },
+        }
+        await _broadcast_sync_to_other_workers(worker_id, sync_payload)
 
         _write_log("worker_enrolled", worker_id, {
             "employee_id": username,

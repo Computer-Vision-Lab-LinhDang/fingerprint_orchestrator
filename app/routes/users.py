@@ -5,9 +5,11 @@ import logging
 from fastapi import APIRouter, HTTPException
 
 from app.core.config import get_settings
+from app.mqtt.handlers import broadcast_user_deleted
 from app.repositories.user_repo import get_user_repo
 from app.repositories.fingerprint_repo import get_fingerprint_repo
 from app.repositories.storage_repo import get_storage_repo
+from app.schemas.mqtt_payloads import UserDeletedEvent
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["Users"])
@@ -52,8 +54,11 @@ async def delete_user(user_id: str):
     user_repo = get_user_repo()
     fp_repo = get_fingerprint_repo()
     storage = get_storage_repo()
+    user = await user_repo.find_by_id(user_id)
+    if not user:
+        raise HTTPException(404, "User not found")
 
-    employee_id = await user_repo.get_employee_id(user_id)
+    employee_id = user.get("employee_id", "")
     image_paths = await fp_repo.get_image_paths_by_user(user_id)
 
     deleted_paths = set()
@@ -78,4 +83,15 @@ async def delete_user(user_id: str):
     deleted = await user_repo.delete(user_id)
     if not deleted:
         raise HTTPException(404, "User not found")
+
+    try:
+        await broadcast_user_deleted(
+            UserDeletedEvent(
+                user_id=user_id,
+                employee_id=employee_id,
+                full_name=user.get("full_name", ""),
+            )
+        )
+    except Exception as exc:
+        logger.warning("Failed to broadcast user delete for %s: %s", user_id, exc)
     return {"status": "deleted", "user_id": user_id}
