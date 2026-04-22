@@ -28,7 +28,6 @@ async def list_fingerprints(user_id: Optional[str] = Query(None)):
 @router.delete("/fingerprints/{fingerprint_id}")
 async def delete_fingerprint(fingerprint_id: str):
     repo = get_fingerprint_repo()
-    storage = get_storage_repo()
     user_repo = get_user_repo()
 
     fp = await repo.get_by_id(fingerprint_id)
@@ -36,12 +35,6 @@ async def delete_fingerprint(fingerprint_id: str):
         raise HTTPException(404, "Fingerprint not found")
 
     user = await user_repo.find_by_id(fp["user_id"])
-
-    if fp.get("image_path"):
-        try:
-            storage._client.remove_object(settings.MINIO_BUCKET_IMAGES, fp["image_path"])
-        except Exception as exc:
-            logger.warning("Failed to delete image %s: %s", fp["image_path"], exc)
 
     deleted = await repo.soft_delete(fingerprint_id)
     if not deleted:
