@@ -36,6 +36,10 @@ class TaskPayload(BaseModel):
     task_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     task_type: TaskType
     image_url: str = Field(..., description="Fingerprint image URL on MinIO")
+    image_encrypted: bool = Field(
+        default=False,
+        description="True if image_url points to a Fernet-encrypted payload",
+    )
     model_name: str = Field(default="default", description="Embedding model name")
     extra: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -74,6 +78,7 @@ class EnrollmentUploadCommand(BaseModel):
     object_name: str
     upload_url: str
     content_type: str = "image/tiff"
+    image_encrypted: bool = False
 
 
 class UserDeletedEvent(BaseModel):

@@ -14,11 +14,25 @@ class RegisterRequest(BaseModel):
         default=1,
         description="Finger index (0-9, matches Worker convention)",
     )
-    image_base64: str = Field(..., description="Base64-encoded fingerprint image")
+    image_base64: str = Field(
+        ...,
+        description="Base64-encoded fingerprint image (or encrypted token)",
+    )
+    image_encrypted: bool = Field(
+        default=False,
+        description="True if image_base64 is a Fernet-encrypted token",
+    )
 
 
 # ── Verification ─────────────────────────────────────────────
 class VerifyRequest(BaseModel):
-    image_base64: str = Field(..., description="Base64-encoded fingerprint image")
+    image_base64: str = Field(
+        ...,
+        description="Base64-encoded fingerprint image (or encrypted token)",
+    )
+    image_encrypted: bool = Field(
+        default=False,
+        description="True if image_base64 is a Fernet-encrypted token",
+    )
     top_k: int = Field(default=5, description="Number of results to return")
     threshold: float = Field(default=0.7, description="Minimum similarity threshold")

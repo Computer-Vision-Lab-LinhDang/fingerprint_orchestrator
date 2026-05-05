@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import uuid
 from datetime import datetime, timedelta
@@ -14,7 +15,9 @@ from app.repositories.user_repo import get_user_repo
 from app.services.worker_service import get_worker_service
 from app.mqtt.publisher import get_publisher
 from app.schemas.mqtt_payloads import TaskPayload, TaskType
+from app.core.crypto_utils import encrypt_image_bytes, is_encryption_enabled
 from app.core.config import get_settings
+from app.core.exceptions import StorageError
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +37,21 @@ async def register_fingerprint(
     image_filename: str = "",
     content_type: str = "image/tiff",
     department: str = "",
+    image_encrypted: bool = False,
 ) -> dict:
     storage = get_storage_repo()
     worker_svc = get_worker_service()
     publisher = get_publisher()
     settings = get_settings()
+
+    if image_base64 and not image_encrypted and is_encryption_enabled():
+        try:
+            raw_bytes = base64.b64decode(image_base64)
+        except Exception as exc:
+            raise StorageError(f"Invalid base64 image for encryption: {exc}") from exc
+        image_base64 = encrypt_image_bytes(raw_bytes)
+        image_encrypted = True
+        logger.info("Auto-encrypted fingerprint image before upload")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     if image_filename:
@@ -51,6 +64,7 @@ async def register_fingerprint(
         filename=object_name,
         image_base64=image_base64,
         content_type=content_type,
+        image_encrypted=image_encrypted,
     )
 
     if settings.MINIO_PUBLIC_ENDPOINT:
@@ -76,6 +90,7 @@ async def register_fingerprint(
         task_id=task_id,
         task_type=TaskType.EMBED,
         image_url=image_url,
+        image_encrypted=image_encrypted,
         extra={
             "employee_id": employee_id,
             "full_name": full_name,
