@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     DB_PASSWORD: str = "fingerprint123"
     DB_NAME: str = "fingerprint_db"
 
+    # ── Encryption ───────────────────────────────────────────
+    # Shared Fernet key for MQTT payload encryption.
+    # Must match WORKER_ENCRYPTION_KEY in jetson-nano .env
+    PAYLOAD_ENCRYPTION_KEY: str = ""
+
 
 @lru_cache()
 def get_settings() -> Settings:

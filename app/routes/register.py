@@ -44,6 +44,7 @@ async def register(request: Request, body: RegisterRequest):
             image_base64=body.image_base64,
             finger_index=body.finger_index,
             department=body.department,
+            image_encrypted=body.image_encrypted,
         )
         return RegisterResponse(
             success=True,

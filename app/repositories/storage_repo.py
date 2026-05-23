@@ -48,6 +48,7 @@ class StorageRepository:
         filename: str,
         image_base64: str,
         content_type: str = "image/png",
+        image_encrypted: bool = False,
     ) -> str:
         """
         Upload base64-encoded fingerprint image to MinIO (flat, data lake).
@@ -55,7 +56,10 @@ class StorageRepository:
         Returns the object name.
         """
         try:
-            image_bytes = base64.b64decode(image_base64)
+            if image_encrypted:
+                image_bytes = image_base64.encode("utf-8")
+            else:
+                image_bytes = base64.b64decode(image_base64)
             data = io.BytesIO(image_bytes)
             self._client.put_object(
                 bucket_name=self._bucket_images,

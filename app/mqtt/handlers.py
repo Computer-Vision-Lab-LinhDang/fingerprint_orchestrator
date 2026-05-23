@@ -9,6 +9,7 @@ from typing import Optional
 
 import aiomqtt
 
+from app.core.crypto_utils import is_encryption_enabled
 from app.schemas.mqtt_payloads import (
     EnrollmentUploadCommand,
     EnrollmentUploadStatus,
@@ -371,6 +372,7 @@ async def _handle_worker_enrolled(worker_id: str, message: aiomqtt.Message) -> N
                     object_name=object_name,
                     upload_url=upload_url,
                     content_type="image/tiff",
+                    image_encrypted=is_encryption_enabled(),
                 ),
             )
 
@@ -418,6 +420,9 @@ async def _handle_edge_register(edge_id: str, message: aiomqtt.Message) -> None:
         image_base64 = data.get("image_base64", "")
         image_filename = data.get("image_filename", "")
 
+        # Preserve encrypted payload from edge; decrypt only on worker
+        image_encrypted = data.get("image_encrypted", False)
+
         logger.info("📥 Registration from edge '%s': employee_id=%s, name=%s", edge_id, employee_id, full_name)
 
         if not employee_id or not full_name or not image_base64:
@@ -444,6 +449,7 @@ async def _handle_edge_register(edge_id: str, message: aiomqtt.Message) -> None:
             image_base64=image_base64, finger_index=finger_index,
             department=department,
             image_filename=image_filename,
+            image_encrypted=image_encrypted,
         )
 
         from app.services.registration_service import get_pending_registrations
@@ -466,6 +472,9 @@ async def _handle_edge_verify(edge_id: str, message: aiomqtt.Message) -> None:
         task_id = data.get("task_id", "")
         image_base64 = data.get("image_base64", "")
         image_filename = data.get("image_filename", "")
+
+        # Preserve encrypted payload from edge; decrypt only on worker
+        image_encrypted = data.get("image_encrypted", False)
 
         logger.info("📥 Verify request from edge '%s': task=%s", edge_id, task_id)
 
